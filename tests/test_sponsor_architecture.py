@@ -19,4 +19,4 @@ def test_redis_key_conventions_are_namespaced():
 
 
 def test_default_weave_project_is_judge_readable():
-    assert default_project_name() == "rezn-ai-hackathon"
+    assert default_project_name() == "rezn-ai/rezn-ai"

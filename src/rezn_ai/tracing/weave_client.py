@@ -10,6 +10,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+DEFAULT_WEAVE_PROJECT = "rezn-ai/rezn-ai"
+
 
 @dataclass(frozen=True)
 class WeaveStatus:
@@ -20,7 +22,7 @@ class WeaveStatus:
 
 
 def default_project_name() -> str:
-    return os.getenv("WEAVE_PROJECT", "rezn-ai-hackathon")
+    return os.getenv("WEAVE_PROJECT", DEFAULT_WEAVE_PROJECT)
 
 
 def initialize_weave(project: str | None = None) -> WeaveStatus:

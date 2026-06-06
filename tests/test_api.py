@@ -11,5 +11,5 @@ def test_health_exposes_weave_project():
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "weave_project": "rezn-ai-hackathon",
+        "weave_project": "rezn-ai/rezn-ai",
     }

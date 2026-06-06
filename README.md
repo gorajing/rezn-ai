@@ -65,8 +65,12 @@ Start the sponsor-first backend environment:
 cp .env.example .env
 docker compose up -d redis
 uv sync --extra dev
+uv run --extra dev python scripts/weave_doctor.py
 uv run uvicorn rezn_ai.api.main:app --reload
 ```
+
+Set `WANDB_API_KEY` in `.env` or your shell before expecting traces to appear in the W&B project
+`rezn-ai/rezn-ai`.
 
 Then verify the clean composition kernel and provenance workflow:
 
