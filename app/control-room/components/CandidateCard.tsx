@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Candidate, CandidateStatus } from "../types";
 import { Waveform } from "./Waveform";
 import { ScoreRing } from "./ScoreRing";
@@ -53,19 +53,34 @@ export function CandidateCard({
   onSelectFinal,
 }: CandidateCardProps) {
   const [progress, setProgress] = useState(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const hasAudio = Boolean(candidate.audioUrl);
   const isFinal = candidate.status === "final";
   const isRejected = candidate.status === "rejected";
 
+  // Drive the real <audio> element from the shared `playing` state.
   useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (playing) el.play().catch(() => undefined);
+    else el.pause();
+  }, [playing]);
+
+  // Progress: from the real audio when we have a preview, else a simulated bar.
+  useEffect(() => {
+    if (hasAudio) {
+      const el = audioRef.current;
+      if (!el) return;
+      const onTime = () => setProgress(el.duration ? el.currentTime / el.duration : 0);
+      el.addEventListener("timeupdate", onTime);
+      return () => el.removeEventListener("timeupdate", onTime);
+    }
     if (!playing) return;
     const id = setInterval(() => {
-      setProgress((p) => {
-        const next = p + 0.25 / candidate.durationSec;
-        return next >= 1 ? 1 : next;
-      });
+      setProgress((p) => Math.min(1, p + 0.25 / candidate.durationSec));
     }, 250);
     return () => clearInterval(id);
-  }, [playing, candidate.durationSec]);
+  }, [hasAudio, playing, candidate.durationSec]);
 
   const pill = STATUS_PILL[candidate.status];
 
@@ -131,6 +146,7 @@ export function CandidateCard({
 
       {/* Player */}
       <div className="flex items-center gap-3">
+        {hasAudio && <audio ref={audioRef} src={candidate.audioUrl} preload="none" />}
         <button
           onClick={onTogglePlay}
           className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-cyan-400 text-black shadow-lg shadow-violet-500/20 transition-transform hover:scale-105"

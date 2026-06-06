@@ -24,6 +24,8 @@ export interface Candidate {
   durationSec: number;
   reasons: string[];
   parentId?: string;
+  audioUrl?: string; // live preview WAV served from the API /artifacts mount
+  traceUrl?: string; // W&B Weave trace link
 }
 
 export type EventLevel = "info" | "agent" | "score" | "success" | "warn";

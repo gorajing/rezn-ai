@@ -11,6 +11,8 @@ type CandidateBoardProps = {
   candidates: Candidate[];
   playingId: string | null;
   skeletonCount: number;
+  canRefine: boolean;
+  onRefine: () => void;
   onExample: (prompt: string) => void;
   onTogglePlay: (id: string) => void;
   onApprove: (id: string) => void;
@@ -41,9 +43,19 @@ export function CandidateBoard(props: CandidateBoardProps) {
           </h2>
         </div>
         {batchStatus !== "generating" && (
-          <div className="flex shrink-0 gap-4 text-right">
+          <div className="flex shrink-0 items-center gap-4 text-right">
             <Stat label="Candidates" value={String(candidates.length)} />
             <Stat label="Approved" value={String(approved)} />
+            {props.canRefine && (
+              <button
+                onClick={props.onRefine}
+                title="Generate the next batch, weighted by your approvals & rejections"
+                className="flex items-center gap-1.5 rounded-xl border border-violet-400/40 bg-violet-500/15 px-3 py-2 text-xs font-medium text-violet-100 transition-colors hover:bg-violet-500/25"
+              >
+                <SparkIcon className="h-3.5 w-3.5" />
+                Refine from feedback
+              </button>
+            )}
           </div>
         )}
       </div>
