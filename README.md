@@ -1,6 +1,6 @@
 # rezn-ai
 
-`rezn-ai` is a clean-room multi-agent music lab. Multiple bounded agents create original music
+`rezn-ai` is a multi-agent music lab. Multiple bounded agents create original music
 candidates, evaluate each other, learn from human taste feedback, and produce a documented run folder
 for every selected output.
 
