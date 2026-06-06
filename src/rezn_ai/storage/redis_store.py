@@ -1,48 +1,99 @@
-"""Redis live-state layer for the orchestration loop.
+"""Redis live-state layer for the generator.
 
-This module holds two things:
+Three Redis data structures map onto the generator almost 1:1:
 
-1. Key-convention helpers (``run_key``, ``candidate_key`` …) that document the
-   namespaced key layout for the candidate lab.
-2. :class:`RedisStore` — the working store used by the conductor, built on three
-   Redis data structures:
+  • Sorted Sets — candidates ranked by technical_score (per batch), and the global
+    refinement-memory lesson library ranked by improvement_delta.
+  • Streams     — the live event log per batch.
+  • Hashes      — per-candidate state.
 
-   • Sorted Sets  — merit-ranked lesson library (ZADD by improvement_delta)
-   • Streams + Consumer Groups — event log + convergence detection
-   • Hashes       — per-track fix history (Mix Engineer decision context)
+Connection helpers build a URL for local Redis *or* Redis Cloud (TLS via rediss://).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, is_dataclass
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import redis as redis_lib
 
-from ..models import MemoryLesson, RunEvent, RunState
+from ..models import Batch, BatchEvent, Candidate, MemoryLesson
 
 logger = logging.getLogger(__name__)
 
 
-# ── Key conventions ──────────────────────────────────────────────────────────
+# ── Connection ────────────────────────────────────────────────────────────────
+
+DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 
 
-def run_key(run_id: str) -> str:
-    return f"rezn:runs:{run_id}"
+def _is_truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def redis_url_from_env() -> str:
+    """
+    Resolve the Redis connection URL.
+
+    Precedence:
+      1. ``REDIS_URL`` if set (e.g. a Redis Cloud ``rediss://default:pw@host:port``).
+      2. Otherwise assembled from ``REDIS_HOST``/``REDIS_PORT``/``REDIS_USERNAME``
+         (default ``default``)/``REDIS_PASSWORD``/``REDIS_TLS``.
+      3. Otherwise the local default (``redis://localhost:6379/0``).
+    """
+    url = os.getenv("REDIS_URL")
+    if url:
+        return url
+
+    host = os.getenv("REDIS_HOST")
+    if not host:
+        return DEFAULT_REDIS_URL
+
+    port = os.getenv("REDIS_PORT", "6379")
+    username = os.getenv("REDIS_USERNAME", "default")
+    password = os.getenv("REDIS_PASSWORD", "")
+    scheme = "rediss" if _is_truthy(os.getenv("REDIS_TLS")) else "redis"
+    auth = f"{username}:{password}@" if password else ""
+    return f"{scheme}://{auth}{host}:{port}"
+
+
+def redact_url(url: str) -> str:
+    """Return ``url`` with any password masked, safe for logs and CLI output."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<unparseable redis url>"
+    if not parts.password:
+        return url
+    host = parts.hostname or ""
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    user = parts.username or ""
+    netloc = f"{user}:***@{host}" if user else f":***@{host}"
+    return urlunsplit(parts._replace(netloc=netloc))
+
+
+# ── Key conventions ───────────────────────────────────────────────────────────
+
+
+def batch_key(batch_id: str) -> str:
+    return f"rezn:batches:{batch_id}"
 
 
 def candidate_key(candidate_id: str) -> str:
     return f"rezn:candidates:{candidate_id}"
 
 
-def run_candidates_key(run_id: str) -> str:
-    return f"rezn:run:{run_id}:candidates"
+def batch_candidates_key(batch_id: str) -> str:
+    return f"rezn:batch:{batch_id}:candidates"
 
 
-def run_events_key(run_id: str) -> str:
-    return f"rezn:run:{run_id}:events"
+def batch_events_key(batch_id: str) -> str:
+    return f"rezn:batch:{batch_id}:events"
 
 
 def feedback_key(candidate_id: str) -> str:
@@ -53,200 +104,170 @@ def harness_weights_key() -> str:
     return "rezn:harness:strategy_weights"
 
 
+def lessons_key() -> str:
+    return "rezn:lessons:global"
+
+
 def encode_json(payload: Any) -> str:
     value = asdict(payload) if is_dataclass(payload) else payload
     return json.dumps(value, sort_keys=True)
 
 
-# ── Store ────────────────────────────────────────────────────────────────────
+# ── Candidate <-> Redis hash serialization ─────────────────────────────────────
 
-LESSONS_KEY = "lessons:global"
-CONVERGENCE_GROUP = "convergence_detector"
-CONVERGENCE_THRESHOLD = 0.05   # delta below this means "metrics unchanged"
-CONVERGENCE_STALL_COUNT = 3    # trigger stall after N low-delta attempts on same fix
+_OPTIONAL_STR_FIELDS = ("audio_url", "arrangement_url", "trace_url", "parent_candidate_id", "feedback")
+_JSON_FIELDS = ("scores", "midi_urls", "reasons")
+
+
+def _candidate_to_mapping(c: Candidate) -> dict[str, str]:
+    mapping = {
+        "candidate_id": c.candidate_id,
+        "batch_id": c.batch_id,
+        "strategy": c.strategy,
+        "seed": str(c.seed),
+        "key": c.key,
+        "mode": c.mode,
+        "tempo": str(c.tempo),
+        "status": c.status,
+        "technical_score": str(c.technical_score),
+        "created_at": c.created_at,
+        "scores": json.dumps(c.scores),
+        "midi_urls": json.dumps(c.midi_urls),
+        "reasons": json.dumps(c.reasons),
+    }
+    for field in _OPTIONAL_STR_FIELDS:
+        mapping[field] = getattr(c, field) or ""
+    return mapping
+
+
+def _candidate_from_mapping(m: dict[str, str]) -> Candidate:
+    data: dict[str, Any] = {
+        "candidate_id": m["candidate_id"],
+        "batch_id": m["batch_id"],
+        "strategy": m["strategy"],
+        "seed": int(m["seed"]),
+        "key": m["key"],
+        "mode": m["mode"],
+        "tempo": float(m["tempo"]),
+        "status": m["status"],
+        "technical_score": float(m["technical_score"]),
+        "created_at": m["created_at"],
+    }
+    for field in _JSON_FIELDS:
+        data[field] = json.loads(m.get(field) or ("[]" if field == "reasons" else "{}"))
+    for field in _OPTIONAL_STR_FIELDS:
+        data[field] = m.get(field) or None
+    return Candidate(**data)
 
 
 class RedisStore:
     """
-    Redis-backed store using three distinct data structures:
+    Redis-backed store for batches, candidates, events, and refinement memory.
 
-    • Sorted Sets  — merit-ranked lesson library (ZADD by improvement_delta)
-    • Streams + Consumer Groups — event log + convergence detection
-    • Hashes       — per-track fix history (Mix Engineer decision context)
-
-    Run state is stored as JSON strings under run:{run_id}.
-
-    Accepts either a redis_url string or a pre-built client (for testing with fakeredis).
-    Pass a ``rediss://`` URL to talk to Redis Cloud over TLS.
+    Works against a local Redis or a Redis Cloud database — pass a ``rediss://``
+    URL (TLS) for Redis Cloud. Accepts either a ``redis_url`` string or a pre-built
+    ``_client`` (used by the tests with fakeredis).
     """
 
-    def __init__(
-        self,
-        redis_url: str = "redis://localhost:6379",
-        _client: Any = None,
-    ) -> None:
+    def __init__(self, redis_url: str = DEFAULT_REDIS_URL, _client: Any = None) -> None:
         if _client is not None:
             self._r = _client
         else:
-            self._r = redis_lib.from_url(redis_url, decode_responses=True)
+            self._r = redis_lib.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "5")),
+                socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT", "5")),
+                socket_keepalive=True,
+                retry_on_timeout=True,
+                health_check_interval=30,
+            )
 
-    # ── Run state (JSON string per run) ─────────────────────────────────────
+    # ── Batches (JSON per batch) ─────────────────────────────────────────────
 
-    def save_run(self, run: RunState) -> RunState:
-        self._r.set(f"run:{run.run_id}", run.model_dump_json())
-        return self.get_run(run.run_id)
+    def save_batch(self, batch: Batch) -> Batch:
+        # `candidates` is a read-time projection; never persist it on the batch record.
+        self._r.set(batch_key(batch.batch_id), batch.model_dump_json(exclude={"candidates"}))
+        return batch
 
-    def get_run(self, run_id: str) -> RunState:
-        raw = self._r.get(f"run:{run_id}")
+    def _load_batch(self, batch_id: str) -> Batch:
+        raw = self._r.get(batch_key(batch_id))
         if raw is None:
-            raise KeyError(run_id)
-        return RunState.model_validate_json(raw)
+            raise KeyError(batch_id)
+        return Batch.model_validate_json(raw)
 
-    # ── Events (Redis Stream per run) ────────────────────────────────────────
+    def get_batch(self, batch_id: str) -> Batch:
+        batch = self._load_batch(batch_id)
+        batch.candidates = self.get_ranked_candidates(batch_id)
+        batch.candidate_ids = [c.candidate_id for c in batch.candidates]
+        return batch
 
-    def append_event(self, run_id: str, event: RunEvent) -> RunState:
-        stream_key = f"rezn:events:{run_id}"
-        self._r.xadd(stream_key, {
+    # ── Events (Redis Stream per batch) ──────────────────────────────────────
+
+    def append_event(self, batch_id: str, event: BatchEvent) -> Batch:
+        self._r.xadd(batch_events_key(batch_id), {
             "id": event.id,
             "type": event.type,
             "message": event.message,
             "ts": event.ts,
             "payload": json.dumps(event.payload),
         })
-        # Persist events on the run JSON so REST GET /api/runs/{id} is self-contained.
-        run = self.get_run(run_id)
-        run.events.append(event)
-        self._r.set(f"run:{run_id}", run.model_dump_json())
-        return self.get_run(run_id)
+        batch = self._load_batch(batch_id)
+        batch.events.append(event)
+        self.save_batch(batch)
+        return batch
 
-    def get_stream_events(self, run_id: str) -> list[dict[str, Any]]:
-        """Read raw Redis Stream entries for a run (used by convergence consumer group)."""
-        entries = self._r.xrange(f"rezn:events:{run_id}")
+    def get_stream_events(self, batch_id: str) -> list[dict[str, Any]]:
+        entries = self._r.xrange(batch_events_key(batch_id))
         return [{"stream_id": eid, **fields} for eid, fields in entries]
 
-    # ── Lesson memory (Sorted Set by improvement_delta) ──────────────────────
-    #
-    # Key: lessons:global
-    # Score: improvement_delta (higher = more impactful lesson)
-    # Member: JSON blob with lesson fields
-    #
-    # Write: ZADD lessons:global <delta> '<json>'
-    # Read:  ZREVRANGE lessons:global 0 4 WITHSCORES  → top-5 by delta
+    # ── Candidates (Hash per candidate, Sorted Set for ranking) ──────────────
+
+    def save_candidate(self, candidate: Candidate) -> Candidate:
+        self._r.hset(candidate_key(candidate.candidate_id), mapping=_candidate_to_mapping(candidate))
+        # Sorted set = ranking by technical_score (best first via ZREVRANGE).
+        self._r.zadd(batch_candidates_key(candidate.batch_id), {candidate.candidate_id: candidate.technical_score})
+        return candidate
+
+    def get_candidate(self, candidate_id: str) -> Candidate:
+        m = self._r.hgetall(candidate_key(candidate_id))
+        if not m:
+            raise KeyError(candidate_id)
+        return _candidate_from_mapping(m)
+
+    def get_ranked_candidates(self, batch_id: str) -> list[Candidate]:
+        ids = self._r.zrevrange(batch_candidates_key(batch_id), 0, -1)
+        candidates: list[Candidate] = []
+        for cid in ids:
+            try:
+                candidates.append(self.get_candidate(cid))
+            except KeyError:
+                continue
+        return candidates
+
+    def save_feedback(self, candidate_id: str, payload: dict[str, Any]) -> None:
+        self._r.set(feedback_key(candidate_id), json.dumps(payload))
+
+    # ── Refinement memory (Sorted Set by improvement_delta) ──────────────────
 
     def remember(self, lesson: MemoryLesson, improvement_delta: float = 0.0) -> MemoryLesson:
-        """Write lesson to Sorted Set. Score = improvement_delta so best lessons rank highest."""
         lesson.improvement_delta = improvement_delta
-        payload = json.dumps({
-            "id": lesson.id,
-            "body": lesson.body,
-            "tags": lesson.tags,
-            "improvement_delta": improvement_delta,
-            "created_at": lesson.created_at,
-        })
-        self._r.zadd(LESSONS_KEY, {payload: improvement_delta})
+        self._r.zadd(lessons_key(), {lesson.model_dump_json(): improvement_delta})
         return lesson
 
-    def recall(self, limit: int = 3) -> list[MemoryLesson]:
-        return self.recall_top_lessons(limit)
-
     def recall_top_lessons(self, limit: int = 5) -> list[MemoryLesson]:
-        """ZREVRANGE lessons:global 0 N-1 — top-N lessons by proven improvement delta."""
-        entries = self._r.zrevrange(LESSONS_KEY, 0, limit - 1, withscores=True)
-        lessons = []
-        for raw, score in entries:
-            data = json.loads(raw)
-            lessons.append(MemoryLesson(
-                id=data["id"],
-                body=data["body"],
-                tags=data.get("tags", []),
-                improvement_delta=float(score),
-                created_at=data.get("created_at", ""),
-            ))
-        return lessons
+        entries = self._r.zrevrange(lessons_key(), 0, limit - 1, withscores=True)
+        return [self._lesson_from_entry(raw, score) for raw, score in entries]
 
     def list_memories(self) -> list[MemoryLesson]:
-        entries = self._r.zrevrange(LESSONS_KEY, 0, -1, withscores=True)
-        lessons = []
-        for raw, score in entries:
-            data = json.loads(raw)
-            lessons.append(MemoryLesson(
-                id=data["id"],
-                body=data["body"],
-                tags=data.get("tags", []),
-                improvement_delta=float(score),
-                created_at=data.get("created_at", ""),
-            ))
-        return lessons
+        entries = self._r.zrevrange(lessons_key(), 0, -1, withscores=True)
+        return [self._lesson_from_entry(raw, score) for raw, score in entries]
 
-    # ── Per-track fix history (Hash per track) ───────────────────────────────
-    #
-    # Key: track:{track_name}
-    # Fields: {fix_kind}_count, last_fix_ts, last_delta, last_fix_kind
-    #
-    # Mix Engineer queries HGETALL track:{name} before proposing a fix.
-    # If highpass_count >= 3 with diminishing delta → try a different approach.
-
-    def record_track_fix(self, track: str, fix_kind: str, delta: float, ts: str) -> None:
-        key = f"track:{track}"
-        count_field = f"{fix_kind}_count"
-        current = int(self._r.hget(key, count_field) or 0)
-        self._r.hset(key, mapping={
-            count_field: current + 1,
-            "last_fix_ts": ts,
-            "last_delta": str(delta),
-            "last_fix_kind": fix_kind,
-        })
-
-    def get_track_history(self, track: str) -> dict[str, Any]:
-        """HGETALL track:{name} — returns typed dict for Mix Engineer consumption."""
-        raw = self._r.hgetall(f"track:{track}")
-        result: dict[str, Any] = {}
-        for k, v in raw.items():
-            if k.endswith("_count"):
-                result[k] = int(v)
-            elif k == "last_delta":
-                result[k] = float(v)
-            else:
-                result[k] = v
-        return result
-
-    # ── Convergence detection (Stream + Consumer Group) ───────────────────────
-    #
-    # Consumer group "convergence_detector" watches the event stream.
-    # Pattern: fix_proposed → fix_applied → metrics_unchanged (delta < threshold)
-    # If repeated N times on same issue → XADD CONVERGENCE_STALL to stream.
-    # The stall event appears in the Weave trace as a diagnosable signal.
-
-    def ensure_convergence_group(self, run_id: str) -> None:
-        """Create consumer group for convergence detection (idempotent)."""
-        stream_key = f"rezn:events:{run_id}"
-        try:
-            self._r.xgroup_create(stream_key, CONVERGENCE_GROUP, id="0", mkstream=True)
-        except redis_lib.exceptions.ResponseError:
-            pass  # group already exists
-
-    def check_convergence_stall(self, run_id: str, issue: str, fix_kind: str, track: str) -> bool:
-        """
-        Detect stall: same fix applied >= CONVERGENCE_STALL_COUNT times with delta < threshold.
-        Returns True if CONVERGENCE_STALL should fire.
-        """
-        h = self.get_track_history(track)
-        count = int(h.get(f"{fix_kind}_count", 0))
-        last_delta = float(h.get("last_delta", 1.0))
-        return count >= CONVERGENCE_STALL_COUNT and abs(last_delta) < CONVERGENCE_THRESHOLD
-
-    def push_convergence_stall(self, run_id: str, issue: str, fix_kind: str, track: str) -> None:
-        """XADD CONVERGENCE_STALL event to stream — visible in Weave trace."""
-        self._r.xadd(f"rezn:events:{run_id}", {
-            "type": "CONVERGENCE_STALL",
-            "issue": issue,
-            "fix_kind": fix_kind,
-            "track": track,
-            "message": (
-                f"Convergence stall: {fix_kind} on {track} applied "
-                f"{CONVERGENCE_STALL_COUNT}+ times with diminishing delta — try a different approach."
-            ),
-        })
+    @staticmethod
+    def _lesson_from_entry(raw: str, score: float) -> MemoryLesson:
+        lesson = MemoryLesson.model_validate_json(raw)
+        lesson.improvement_delta = float(score)
+        return lesson
 
     # ── Healthcheck ──────────────────────────────────────────────────────────
 
@@ -257,11 +278,10 @@ class RedisStore:
             return False
 
     def doctor_status(self) -> dict[str, bool]:
-        """Check all three Redis data structures are reachable."""
+        """Confirm the connection and the three data structures are reachable."""
         try:
             ping = bool(self._r.ping())
-            sorted_set_ok = self._r.type(LESSONS_KEY) in ("zset", "none")
-            # Streams and Hashes are created lazily; we just confirm the connection works.
+            sorted_set_ok = self._r.type(lessons_key()) in ("zset", "none")
             return {
                 "redis_ping": ping,
                 "sorted_set_accessible": ping and sorted_set_ok,

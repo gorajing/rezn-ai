@@ -1,96 +1,90 @@
+"""In-memory store used when Redis is unavailable (local dev, CI without Redis).
+
+Implements the same interface as :class:`RedisStore` so the conductor and API are
+store-agnostic. Redis-specific niceties (Streams, Consumer Groups) are emulated
+with plain Python; the batch event list carries the same information.
+"""
+
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
 
-from ..models import MemoryLesson, RunEvent, RunState
-
-CONVERGENCE_THRESHOLD = 0.05   # delta below this counts as "metrics unchanged"
-CONVERGENCE_STALL_COUNT = 3    # trigger stall after this many low-delta attempts on same fix
+from ..models import Batch, BatchEvent, Candidate, MemoryLesson
 
 
 class InMemoryStore:
-    """
-    Reliable fixture store used when Redis is unavailable (local dev, CI without Redis).
-
-    Implements the same interface as RedisStore so the conductor is store-agnostic.
-    Redis-specific features (Streams, Consumer Groups) are no-ops here — the conductor
-    event list carries the same information for the in-memory case.
-    """
-
     def __init__(self) -> None:
-        self._runs: dict[str, RunState] = {}
-        self._memories: list[tuple[float, MemoryLesson]] = []   # (improvement_delta, lesson)
-        self._track_history: dict[str, dict[str, Any]] = {}
+        self._batches: dict[str, Batch] = {}
+        self._candidates: dict[str, Candidate] = {}
+        self._rankings: dict[str, dict[str, float]] = {}   # batch_id -> {candidate_id: score}
+        self._lessons: list[tuple[float, MemoryLesson]] = []
+        self._feedback: dict[str, dict[str, Any]] = {}
 
-    # ── Run state ────────────────────────────────────────────────────────────
+    # ── Batches ──────────────────────────────────────────────────────────────
 
-    def save_run(self, run: RunState) -> RunState:
-        self._runs[run.run_id] = deepcopy(run)
-        return self.get_run(run.run_id)
+    def save_batch(self, batch: Batch) -> Batch:
+        stored = batch.model_copy(deep=True)
+        stored.candidates = []  # projection, never stored
+        self._batches[batch.batch_id] = stored
+        return batch
 
-    def get_run(self, run_id: str) -> RunState:
-        if run_id not in self._runs:
-            raise KeyError(run_id)
-        return deepcopy(self._runs[run_id])
+    def get_batch(self, batch_id: str) -> Batch:
+        if batch_id not in self._batches:
+            raise KeyError(batch_id)
+        batch = self._batches[batch_id].model_copy(deep=True)
+        batch.candidates = self.get_ranked_candidates(batch_id)
+        batch.candidate_ids = [c.candidate_id for c in batch.candidates]
+        return batch
 
-    def append_event(self, run_id: str, event: RunEvent) -> RunState:
-        run = self._runs[run_id]
-        run.events.append(event)
-        self._runs[run_id] = run
-        return self.get_run(run_id)
+    def append_event(self, batch_id: str, event: BatchEvent) -> Batch:
+        batch = self._batches[batch_id]
+        batch.events.append(event.model_copy(deep=True))
+        return self.get_batch(batch_id)
 
-    # ── Lesson memory (sorted by improvement_delta, highest first) ───────────
+    def get_stream_events(self, batch_id: str) -> list[dict[str, Any]]:
+        batch = self._batches.get(batch_id)
+        if batch is None:
+            return []
+        return [{"stream_id": str(i), "type": e.type, "message": e.message} for i, e in enumerate(batch.events)]
+
+    # ── Candidates ─────────────────────────────────────────────────────────────
+
+    def save_candidate(self, candidate: Candidate) -> Candidate:
+        self._candidates[candidate.candidate_id] = candidate.model_copy(deep=True)
+        self._rankings.setdefault(candidate.batch_id, {})[candidate.candidate_id] = candidate.technical_score
+        return candidate
+
+    def get_candidate(self, candidate_id: str) -> Candidate:
+        if candidate_id not in self._candidates:
+            raise KeyError(candidate_id)
+        return self._candidates[candidate_id].model_copy(deep=True)
+
+    def get_ranked_candidates(self, batch_id: str) -> list[Candidate]:
+        ranking = self._rankings.get(batch_id, {})
+        ordered = sorted(ranking.items(), key=lambda kv: kv[1], reverse=True)
+        return [self.get_candidate(cid) for cid, _ in ordered if cid in self._candidates]
+
+    def save_feedback(self, candidate_id: str, payload: dict[str, Any]) -> None:
+        self._feedback[candidate_id] = deepcopy(payload)
+
+    # ── Refinement memory ──────────────────────────────────────────────────────
 
     def remember(self, lesson: MemoryLesson, improvement_delta: float = 0.0) -> MemoryLesson:
-        lesson = deepcopy(lesson)
-        lesson.improvement_delta = improvement_delta
-        self._memories.append((improvement_delta, lesson))
-        return deepcopy(lesson)
-
-    def recall(self, limit: int = 3) -> list[MemoryLesson]:
-        return self.recall_top_lessons(limit)
+        stored = lesson.model_copy(deep=True)
+        stored.improvement_delta = improvement_delta
+        self._lessons.append((improvement_delta, stored))
+        return stored
 
     def recall_top_lessons(self, limit: int = 5) -> list[MemoryLesson]:
-        """Return top-N lessons ranked by improvement_delta (highest proven impact first)."""
-        ranked = sorted(self._memories, key=lambda x: x[0], reverse=True)
-        return [deepcopy(lesson) for _, lesson in ranked[:limit]]
+        ranked = sorted(self._lessons, key=lambda x: x[0], reverse=True)
+        return [lesson.model_copy(deep=True) for _, lesson in ranked[:limit]]
 
     def list_memories(self) -> list[MemoryLesson]:
-        ranked = sorted(self._memories, key=lambda x: x[0], reverse=True)
-        return [deepcopy(lesson) for _, lesson in ranked]
+        ranked = sorted(self._lessons, key=lambda x: x[0], reverse=True)
+        return [lesson.model_copy(deep=True) for _, lesson in ranked]
 
-    # ── Per-track fix history ────────────────────────────────────────────────
-
-    def record_track_fix(self, track: str, fix_kind: str, delta: float, ts: str) -> None:
-        if track not in self._track_history:
-            self._track_history[track] = {}
-        h = self._track_history[track]
-        count_key = f"{fix_kind}_count"
-        h[count_key] = h.get(count_key, 0) + 1
-        h["last_fix_ts"] = ts
-        h["last_delta"] = delta
-        h["last_fix_kind"] = fix_kind
-
-    def get_track_history(self, track: str) -> dict[str, Any]:
-        return deepcopy(self._track_history.get(track, {}))
-
-    # ── Convergence detection (in-memory version) ────────────────────────────
-
-    def check_convergence_stall(self, run_id: str, issue: str, fix_kind: str, track: str) -> bool:
-        h = self.get_track_history(track)
-        count = int(h.get(f"{fix_kind}_count", 0))
-        last_delta = float(h.get("last_delta", 1.0))
-        return count >= CONVERGENCE_STALL_COUNT and abs(last_delta) < CONVERGENCE_THRESHOLD
-
-    def push_convergence_stall(self, run_id: str, issue: str, fix_kind: str, track: str) -> None:
-        # In-memory: conductor handles the event append; no Redis stream to push to.
-        pass
-
-    def ensure_convergence_group(self, run_id: str) -> None:
-        pass  # no-op: no Redis stream
-
-    # ── Healthcheck ──────────────────────────────────────────────────────────
+    # ── Healthcheck ────────────────────────────────────────────────────────────
 
     def ping(self) -> bool:
         return True

@@ -1,3 +1,11 @@
+"""Domain models for the music generator.
+
+One creative brief fans out into several original *candidates*; candidates are
+ranked by score, curated by a human, and the system refines the next batch from
+that feedback. (This replaced the earlier before/after mix-conductor model — see
+docs/adr/0002-generator-over-mix-conductor.md.)
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -7,57 +15,55 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 
-RunMode = Literal["fixture", "live"]
-RunStatus = Literal["idle", "running", "waiting_for_human", "succeeded", "failed"]
-FixKind = Literal["no_op", "highpass", "gain_adjust", "width_adjust", "regenerate_section", "retune"]
-
-
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:12]}"
 
 
+CandidateStatus = Literal["generated", "approved", "rejected", "variant_requested", "final"]
+BatchStatus = Literal["running", "ranked", "completed", "failed"]
+
+
 class CreativeBrief(BaseModel):
+    """What the operator asks for. One brief → many candidates."""
+
     prompt: str
-    tempo: int = 128
-    key: str = "F# minor"
-    bars: int = 8
-    target_lufs: float = -12.0
-    taste_constraints: list[str] = Field(default_factory=lambda: ["original only", "no artist cloning"])
+    key: str = "F#"
+    mode: Literal["major", "minor"] = "minor"
+    tempo: float = 128.0
+    candidate_count: int = Field(default=4, ge=1, le=12)
+    taste_constraints: list[str] = Field(
+        default_factory=lambda: ["original only", "no sampling", "no artist cloning"]
+    )
 
 
-class AudioBands(BaseModel):
-    sub: float
-    bass: float
-    low_mid: float
-    mid: float
-    hi_mid: float
-    high: float
+class Candidate(BaseModel):
+    """One generated piece of music plus its score, artifacts, and curation state."""
+
+    candidate_id: str
+    batch_id: str
+    strategy: str
+    seed: int
+    key: str
+    mode: str
+    tempo: float
+    status: CandidateStatus = "generated"
+    technical_score: float = 0.0
+    scores: dict[str, Any] = Field(default_factory=dict)
+    reasons: list[str] = Field(default_factory=list)
+    audio_url: str | None = None
+    arrangement_url: str | None = None
+    midi_urls: dict[str, str] = Field(default_factory=dict)
+    trace_url: str | None = None
+    parent_candidate_id: str | None = None
+    feedback: str | None = None
+    created_at: str = Field(default_factory=utc_now)
 
 
-class AudioMetrics(BaseModel):
-    integrated_lufs: float
-    stereo_width: float
-    duration_seconds: float
-    sample_rate: int
-    n_channels: int
-    bands: AudioBands
-
-
-class ProposedFix(BaseModel):
-    kind: FixKind
-    target: str
-    value: float | str | None = None
-    rationale: str
-    evidence: str
-    expected_improvement: str
-    requires_human_approval: bool = False
-
-
-class RunEvent(BaseModel):
+class BatchEvent(BaseModel):
     id: str = Field(default_factory=lambda: new_id("evt"))
     type: str
     message: str
@@ -65,60 +71,46 @@ class RunEvent(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class Batch(BaseModel):
+    batch_id: str
+    brief: CreativeBrief
+    status: BatchStatus = "running"
+    candidate_ids: list[str] = Field(default_factory=list)  # ranked, best first
+    events: list[BatchEvent] = Field(default_factory=list)
+    selected_final_id: str | None = None
+    created_at: str = Field(default_factory=utc_now)
+    # Populated on read from the candidate store; not persisted on the batch record.
+    candidates: list[Candidate] = Field(default_factory=list)
+
+
 class MemoryLesson(BaseModel):
-    id: str = Field(default_factory=lambda: new_id("mem"))
-    kind: Literal["mix_lesson"] = "mix_lesson"
+    """Refinement memory — what worked, ranked by proven improvement delta."""
+
+    id: str = Field(default_factory=lambda: new_id("lesson"))
+    kind: Literal["refinement_lesson"] = "refinement_lesson"
     body: str
     tags: list[str] = Field(default_factory=list)
+    strategy: str | None = None
     improvement_delta: float = 0.0
-    metrics_before: AudioMetrics | None = None
-    metrics_after: AudioMetrics | None = None
     created_at: str = Field(default_factory=utc_now)
 
 
-class TrackHistory(BaseModel):
-    """Per-track fix history stored in Redis Hash. Mix Engineer queries before proposing a fix."""
-    track: str
-    history: dict[str, Any] = Field(default_factory=dict)
-
-    def fix_count(self, fix_kind: str) -> int:
-        return int(self.history.get(f"{fix_kind}_count", 0))
-
-    def last_delta(self) -> float:
-        return float(self.history.get("last_delta", 1.0))
-
-    def should_try_different_approach(self, fix_kind: str, stall_count: int = 3, min_delta: float = 0.05) -> bool:
-        """True if this fix_kind has been applied >= stall_count times with diminishing returns."""
-        return self.fix_count(fix_kind) >= stall_count and abs(self.last_delta()) < min_delta
+# ── API request bodies ─────────────────────────────────────────────────────────
 
 
-class RunArtifacts(BaseModel):
-    before_wav_url: str | None = None
-    after_wav_url: str | None = None
-    weave_url: str | None = None
-
-
-class RunState(BaseModel):
-    run_id: str
-    mode: RunMode
-    status: RunStatus
+class BatchCreateRequest(BaseModel):
     brief: CreativeBrief
-    current_stage: str
-    events: list[RunEvent] = Field(default_factory=list)
-    metrics_before: AudioMetrics | None = None
-    metrics_after: AudioMetrics | None = None
-    proposed_fix: ProposedFix | None = None
-    memory_recall: list[MemoryLesson] = Field(default_factory=list)
-    artifacts: RunArtifacts = Field(default_factory=RunArtifacts)
 
 
-class RunCreateRequest(BaseModel):
-    brief: CreativeBrief
-    mode: RunMode = "fixture"
+class FeedbackRequest(BaseModel):
+    note: str = ""
+
+
+class SelectFinalRequest(BaseModel):
+    candidate_id: str
 
 
 class DoctorResponse(BaseModel):
     ok: bool
     checks: dict[str, bool]
     notes: list[str] = Field(default_factory=list)
-

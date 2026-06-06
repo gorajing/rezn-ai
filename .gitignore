@@ -12,3 +12,4 @@ artifacts/runs/
 
 *.egg-info/
 build/
+artifacts/batches/
