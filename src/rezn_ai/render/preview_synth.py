@@ -111,12 +111,23 @@ def _pan_gains(pan: float) -> tuple[float, float]:
     return math.cos(angle), math.sin(angle)
 
 
-def render_arrangement(arrangement: dict[str, Any], *, sample_rate: int = SAMPLE_RATE) -> tuple[array, array, int]:
-    """Render an arrangement to (left, right, sample_rate) float buffers in [-1, 1]."""
+def render_arrangement(
+    arrangement: dict[str, Any],
+    *,
+    sample_rate: int = SAMPLE_RATE,
+    max_seconds: float | None = None,
+) -> tuple[array, array, int]:
+    """Render an arrangement to (left, right, sample_rate) float buffers in [-1, 1].
+
+    ``max_seconds`` caps the render length (used by the API for short, snappy
+    previews); ``None`` renders the full arrangement.
+    """
     tempo = float(arrangement["identity"]["tempo"])
     seconds_per_beat = 60.0 / tempo
     total_beats = float(arrangement["form"]["total_beats"])
     total_samples = int(math.ceil((total_beats * seconds_per_beat + TAIL_SECONDS) * sample_rate))
+    if max_seconds is not None:
+        total_samples = min(total_samples, max(1, int(max_seconds * sample_rate)))
 
     left = array("d", bytes(8 * total_samples))
     right = array("d", bytes(8 * total_samples))
@@ -172,8 +183,14 @@ def _normalize_to_int16(left: array, right: array) -> bytes:
     return bytes(frames)
 
 
-def write_preview_wav(arrangement: dict[str, Any], path: Path, *, sample_rate: int = SAMPLE_RATE) -> Path:
-    left, right, rate = render_arrangement(arrangement, sample_rate=sample_rate)
+def write_preview_wav(
+    arrangement: dict[str, Any],
+    path: Path,
+    *,
+    sample_rate: int = SAMPLE_RATE,
+    max_seconds: float | None = None,
+) -> Path:
+    left, right, rate = render_arrangement(arrangement, sample_rate=sample_rate, max_seconds=max_seconds)
     pcm = _normalize_to_int16(left, right)
     path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(path), "wb") as wav:

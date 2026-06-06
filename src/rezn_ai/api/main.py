@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..conductor import BatchConductor
 from ..generation.engine import LocalGeneratorEngine
+from ..generation.rezn_engine import ReznGeneratorEngine
 from ..models import (
     Batch,
     BatchCreateRequest,
@@ -90,8 +91,17 @@ app.add_middleware(
 
 app.mount("/artifacts", StaticFiles(directory=ARTIFACTS_ROOT), name="artifacts")
 
+def _build_engine() -> Any:
+    """Default to the clean-room engine (our synth + discriminating scorer); set
+    ``REZN_ENGINE=local`` for the simpler in-repo LocalGeneratorEngine."""
+    if os.getenv("REZN_ENGINE", "rezn").strip().lower() == "local":
+        logger.info("Using LocalGeneratorEngine (REZN_ENGINE=local)")
+        return LocalGeneratorEngine()
+    return ReznGeneratorEngine()
+
+
 store = _build_store()
-engine = LocalGeneratorEngine()
+engine = _build_engine()
 conductor = BatchConductor(store=store, engine=engine, artifacts_root=ARTIFACTS_ROOT)
 
 
