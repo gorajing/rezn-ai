@@ -8,10 +8,13 @@ from pathlib import Path
 from . import config
 from .eval.audio_metrics import measure_wav
 from .eval.mix_checks import evaluate_metrics
+from .agents.orchestrator import orchestrate_batch
+from .agents.schemas import CreativeBrief
 from .music.composition import compose_arrangement
 from .music.midi import export_midi_parts
 from .project import create_run, require_run_dir
 from .provenance import read_json, record_artifact, record_event, write_json
+from .render.preview_synth import preview_path_for_candidate, write_preview_wav
 
 
 def _cmd_init_run(args: argparse.Namespace) -> int:
@@ -50,6 +53,41 @@ def _cmd_export_midi(args: argparse.Namespace) -> int:
     for part, path in exported.items():
         record_artifact(run_dir / config.MANIFEST_NAME, f"midi.{part}", Path(path), "midi")
     print(midi_dir)
+    return 0
+
+
+def _cmd_batch(args: argparse.Namespace) -> int:
+    brief = CreativeBrief(
+        text=args.brief,
+        key=args.key,
+        mode=args.mode,
+        tempo=args.tempo,
+        candidate_count=args.count,
+    )
+    summary = orchestrate_batch(
+        brief,
+        Path(args.root) / config.DEFAULT_RUNS_DIR,
+        run_title=args.title,
+        base_seed=args.seed,
+    )
+    print(f"batch {summary['batch_id']} -> {summary['candidate_count']} candidates")
+    for row in summary["ranking"]:
+        print(f"  #{row['rank']} {row['candidate_id']}  score={row['technical_score']}")
+    return 0
+
+
+def _cmd_render(args: argparse.Namespace) -> int:
+    run_dir = require_run_dir(Path(args.run_dir))
+    arrangement = read_json(run_dir / config.ARRANGEMENT_NAME)
+    preview_path = preview_path_for_candidate(run_dir)
+    write_preview_wav(arrangement, preview_path)
+    record_artifact(run_dir / config.MANIFEST_NAME, "preview_audio", preview_path, "wav")
+    record_event(
+        run_dir / config.MANIFEST_NAME,
+        "preview.rendered",
+        {"path": str(preview_path), "renderer": "rezn_ai.render.preview_synth"},
+    )
+    print(preview_path)
     return 0
 
 
@@ -109,6 +147,21 @@ def build_parser() -> argparse.ArgumentParser:
     export_midi = sub.add_parser("export-midi", help="export MIDI parts for a run")
     export_midi.add_argument("run_dir")
     export_midi.set_defaults(func=_cmd_export_midi)
+
+    render = sub.add_parser("render", help="render deterministic preview audio for a run")
+    render.add_argument("run_dir")
+    render.set_defaults(func=_cmd_render)
+
+    batch = sub.add_parser("batch", help="run a Weave-traced multi-candidate batch from one brief")
+    batch.add_argument("--brief", default="clean-room dark melodic electronic")
+    batch.add_argument("--title", default=None, help="batch run folder name")
+    batch.add_argument("--key", default="D#")
+    batch.add_argument("--mode", default="minor", choices=("major", "minor"))
+    batch.add_argument("--tempo", type=float, default=128.0)
+    batch.add_argument("--count", type=int, default=4, help="number of candidates")
+    batch.add_argument("--seed", type=int, default=77, help="base seed")
+    batch.add_argument("--root", default=".", help="project root")
+    batch.set_defaults(func=_cmd_batch)
 
     analyze = sub.add_parser("analyze", help="measure a rendered WAV")
     analyze.add_argument("run_dir")

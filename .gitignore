@@ -12,3 +12,12 @@ coverage/
 dist/
 build/
 *.egg-info/
+.rocketride/
+
+# Local editor/tooling rules (rocketride plugin)
+.claude/
+.cursor/
+
+# Generated run artifacts (large WAVs); keep the folder, not its contents
+runs/*
+!runs/.gitkeep
