@@ -94,6 +94,13 @@ def _cmd_refine(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_evaluate(args: argparse.Namespace) -> int:
+    from .eval.weave_scorers import run_evaluation
+
+    run_evaluation(runs_root=args.root, base_seed=args.seed)
+    return 0
+
+
 def _cmd_render(args: argparse.Namespace) -> int:
     run_dir = require_run_dir(Path(args.run_dir))
     arrangement = read_json(run_dir / config.ARRANGEMENT_NAME)
@@ -180,6 +187,11 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--seed", type=int, default=77, help="base seed")
     batch.add_argument("--root", default=".", help="project root")
     batch.set_defaults(func=_cmd_batch)
+
+    evaluate = sub.add_parser("evaluate", help="run the Weave Evaluation over a fixed brief set")
+    evaluate.add_argument("--root", default="./runs/eval", help="where eval batches are written")
+    evaluate.add_argument("--seed", type=int, default=42, help="base seed for eval batches")
+    evaluate.set_defaults(func=_cmd_evaluate)
 
     refine = sub.add_parser(
         "refine",

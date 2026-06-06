@@ -18,6 +18,8 @@ from typing import Any
 
 import weave
 
+from ..agents.llm_agents import critique, propose_plan
+from ..agents.schemas import CreativeBrief as AgentBrief
 from ..eval.audio_metrics import measure_wav
 from ..eval.mix_checks import evaluate_metrics
 from ..eval.scoring import technical_score
@@ -77,12 +79,28 @@ class ReznGeneratorEngine:
         candidate_id = new_id("cand")
         candidate_dir = Path(artifacts_root) / "batches" / batch_id / candidate_id
 
+        # Optional W&B Inference enrichment. Both calls gate internally on
+        # REZN_ENABLE_INFERENCE: with it off they return deterministic fallbacks
+        # (zero plan nudges, a reproducible critic score), so default behavior and
+        # the test suite are unchanged; with it on, the web demo shows live agents.
+        agent_brief = AgentBrief(
+            text=brief.prompt,
+            key=brief.key,
+            mode=brief.mode,
+            tempo=brief.tempo,
+            candidate_count=brief.candidate_count,
+        )
+        proposal = propose_plan(agent_brief, params.strategy)
+        seed = params.seed + proposal.seed_jitter
+        tempo = max(60.0, min(200.0, params.tempo + proposal.tempo_delta))
+        mode = proposal.mode or params.mode
+
         arrangement = compose_arrangement(
             title=f"{batch_id}:{params.strategy}",
             key=params.key,
-            mode=params.mode,
-            tempo=params.tempo,
-            seed=params.seed,
+            mode=mode,
+            tempo=tempo,
+            seed=seed,
         )
         arrangement_path = candidate_dir / "arrangement.json"
         write_json(arrangement_path, arrangement)
@@ -98,17 +116,28 @@ class ReznGeneratorEngine:
         # duration floor rather than the release-grade 60s default.
         checks = evaluate_metrics(metrics, min_duration_seconds=max(0.1, self.preview_seconds * 0.5))
         score = technical_score(arrangement, metrics, checks)
+        critic = critique(arrangement, metrics, agent_brief)
 
         return CandidateResult(
             candidate_id=candidate_id,
             strategy=params.strategy,
-            seed=params.seed,
+            seed=seed,
             key=params.key,
-            mode=params.mode,
-            tempo=params.tempo,
+            mode=mode,
+            tempo=tempo,
             technical_score=score["technical_score"],
             arrangement=arrangement,
-            scores={**score, "audio": metrics, "checks": checks["checks"]},
+            scores={
+                **score,
+                "audio": metrics,
+                "checks": checks["checks"],
+                "critic_score": critic.critic_score,
+                "critic": {
+                    "score": critic.critic_score,
+                    "reasons": list(critic.reasons),
+                    "source": critic.source,
+                },
+            },
             reasons=list(score["reasons"]),
             arrangement_path=arrangement_path,
             audio_path=audio_path,

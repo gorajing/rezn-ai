@@ -30,7 +30,7 @@ from ..models import (
     SelectFinalRequest,
 )
 from ..storage.memory_store import InMemoryStore
-from ..tracing.weave_client import default_project_name
+from ..tracing.weave_client import default_project_name, initialize_weave
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,11 @@ def _build_engine() -> Any:
     return ReznGeneratorEngine()
 
 
+# Initialize Weave so the conductor/engine @weave.op calls upload traces from the
+# API process (not just the CLI). No-ops safely when WANDB_API_KEY is unset.
+WEAVE_STATUS = initialize_weave()
+logger.info("Weave init: %s (project=%s)", WEAVE_STATUS.reason, WEAVE_STATUS.project)
+
 store = _build_store()
 engine = _build_engine()
 conductor = BatchConductor(store=store, engine=engine, artifacts_root=ARTIFACTS_ROOT)
@@ -120,6 +125,7 @@ def doctor() -> DoctorResponse:
     checks = {
         "weave_import": True,
         "weave_project": bool(os.getenv("WEAVE_PROJECT") or os.getenv("WANDB_PROJECT")),
+        "weave_tracing": WEAVE_STATUS.initialized,  # API actions upload traces to W&B
         "wandb_key": bool(os.getenv("WANDB_API_KEY")),
         "openai_key": bool(os.getenv("OPENAI_API_KEY")),
         "generator_engine": True,

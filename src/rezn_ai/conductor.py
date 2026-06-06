@@ -14,6 +14,7 @@ import weave
 
 from .agents.harness import APPROVE_BONUS, BASE_WEIGHT, MIN_WEIGHT, REJECT_PENALTY, _allocate
 from .generation.engine import CandidateResult, GeneratorEngine
+from .tracing.weave_client import weave_workspace_url
 from .models import (
     Batch,
     BatchCreateRequest,
@@ -54,6 +55,7 @@ class BatchConductor:
             audio_url=self._url(result.audio_path),
             arrangement_url=self._url(result.arrangement_path),
             midi_urls={part: self._url(p) for part, p in result.midi_paths.items()},
+            trace_url=weave_workspace_url(),
             parent_candidate_id=parent_id,
         )
 
