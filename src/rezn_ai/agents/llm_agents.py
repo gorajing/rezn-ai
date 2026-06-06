@@ -25,6 +25,19 @@ from .schemas import CreativeBrief
 # W&B Inference endpoint + default model (WeaveHacks sponsor stack).
 WANDB_INFERENCE_BASE_URL = "https://api.inference.wandb.ai/v1"
 DEFAULT_INFERENCE_MODEL = "openai/gpt-oss-120b"
+# Direct-OpenAI fallback model, used only when no W&B key is present.
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+
+# Per-strategy creative personas used to steer the LLM prompt (credit: Vijay's
+# strategy defaults). These shape *prompting* only; the deterministic fallback
+# ignores them, so they never affect reproducibility.
+STRATEGY_PERSONAS: dict[str, str] = {
+    "groove_architect": "tight pocket rhythm, drums-forward, minimal top-end; lock kick and bass",
+    "harmony_driver": "lush chords and melodic inner voices; clear root motion every couple of bars",
+    "texture_builder": "atmospheric layers, pads-forward, slow evolution; drums minimalist",
+    "energy_curve": "dynamic arc with strong buildup and drop, high intro/climax contrast",
+    "wildcard_mutator": "experimental polyrhythm, unexpected harmonic turns, modal borrowing",
+}
 
 
 @dataclass(frozen=True)
@@ -68,19 +81,24 @@ def inference_enabled() -> bool:
     """
     if os.getenv("REZN_ENABLE_INFERENCE", "").strip().lower() not in ("1", "true", "yes"):
         return False
-    return bool(os.getenv("WANDB_INFERENCE_API_KEY") or os.getenv("WANDB_API_KEY"))
+    return bool(
+        os.getenv("WANDB_INFERENCE_API_KEY")
+        or os.getenv("WANDB_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
 
 
 def _inference_client():
+    """Return ``(client, model)``. Prefer W&B Inference (sponsor credits); fall
+    back to direct OpenAI only when no W&B key is present."""
     from openai import OpenAI  # optional at runtime; imported lazily
 
-    api_key = os.getenv("WANDB_INFERENCE_API_KEY") or os.environ["WANDB_API_KEY"]
-    project = os.getenv("WEAVE_PROJECT", "rezn-ai/rezn-ai")
-    return OpenAI(base_url=WANDB_INFERENCE_BASE_URL, api_key=api_key, project=project)
-
-
-def _inference_model() -> str:
-    return os.getenv("WANDB_INFERENCE_MODEL", DEFAULT_INFERENCE_MODEL)
+    wandb_key = os.getenv("WANDB_INFERENCE_API_KEY") or os.getenv("WANDB_API_KEY")
+    if wandb_key:
+        project = os.getenv("WEAVE_PROJECT", "rezn-ai/rezn-ai")
+        client = OpenAI(base_url=WANDB_INFERENCE_BASE_URL, api_key=wandb_key, project=project)
+        return client, os.getenv("WANDB_INFERENCE_MODEL", DEFAULT_INFERENCE_MODEL)
+    return OpenAI(api_key=os.environ["OPENAI_API_KEY"]), DEFAULT_OPENAI_MODEL
 
 
 def _parse_json_object(content: str) -> dict:
@@ -122,7 +140,8 @@ def _coerce_plan(strategy: str, raw: dict) -> PlanProposal:
 
 
 def _llm_propose_plan(brief: CreativeBrief, strategy: str) -> PlanProposal:
-    client = _inference_client()
+    client, model = _inference_client()
+    persona = STRATEGY_PERSONAS.get(strategy, strategy)
     system = (
         "You are a music director shaping ONE candidate in a batch. "
         "Respond with a compact JSON object only, no prose. "
@@ -132,11 +151,11 @@ def _llm_propose_plan(brief: CreativeBrief, strategy: str) -> PlanProposal:
     )
     user = (
         f"Brief: {brief.text}\nKey: {brief.key}\nMode: {brief.mode}\n"
-        f"Tempo: {brief.tempo} BPM\nStrategy persona: {strategy}\n"
+        f"Tempo: {brief.tempo} BPM\nStrategy persona ({strategy}): {persona}\n"
         "Give this candidate a distinct angle that fits the strategy persona."
     )
     response = client.chat.completions.create(
-        model=_inference_model(),
+        model=model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         temperature=0.9,
     )
@@ -190,7 +209,7 @@ def _coerce_critique(raw: dict) -> CritiqueResult:
 
 
 def _llm_critique(arrangement: dict, metrics: dict, brief: CreativeBrief) -> CritiqueResult:
-    client = _inference_client()
+    client, model = _inference_client()
     identity = arrangement.get("identity", {})
     parts = arrangement.get("parts", {})
     part_summary = {name: len(notes) for name, notes in parts.items()}
@@ -206,7 +225,7 @@ def _llm_critique(arrangement: dict, metrics: dict, brief: CreativeBrief) -> Cri
         f"duration={metrics.get('duration_seconds')}s"
     )
     response = client.chat.completions.create(
-        model=_inference_model(),
+        model=model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         temperature=0.3,
     )
