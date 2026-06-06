@@ -1,36 +1,101 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# rezn-ai
 
-## Getting Started
+`rezn-ai` is a multi-agent music lab. Multiple bounded agents create original music
+candidates, evaluate each other, learn from human taste feedback, and produce a documented run folder
+for every selected output.
 
-First, run the development server:
+The project is intentionally built around the WeaveHacks sponsor stack:
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Weave** traces the full orchestration loop and stores evaluations for every candidate.
+- **Redis** stores live run state, candidate metadata, event streams, scores, and human feedback.
+- **CopilotKit** is the human-in-the-loop frontend where operators compare candidates, approve or
+  reject outputs, and request refinements.
+- **Run folders** remain the clean-room source of truth for arrangements, MIDI, preview renders,
+  metrics, notes, and final manifests.
+
+## Goals
+
+- Generate several original candidates from the same creative brief.
+- Make every agent step visible in Weave traces and eval tables.
+- Use Redis as the real-time coordination and memory layer for runs, candidates, and feedback.
+- Give the human curator a CopilotKit interface for approval, rejection, refinement, and final
+  selection.
+- Keep every selected artifact reproducible from plain files in `runs/`.
+
+## Non-Goals
+
+- This repository is not a sample pack, preset collection, or library of imported musical assets.
+- This repository does not require DAW automation for the core demo path.
+- This repository does not hide creative decisions inside opaque state. Important decisions should be
+  reflected in manifests, docs, or committed source.
+
+## Architecture
+
+```text
+rezn-ai/
+  apps/web/              CopilotKit operator interface
+  services/api/          FastAPI orchestration and event API
+  src/rezn_ai/           Python package and CLI
+  src/rezn_ai/agents/    Orchestrator, composer, critic, and harness agents
+  src/rezn_ai/music/     Music theory, arrangement, composition, and MIDI export
+  src/rezn_ai/render/    Deterministic preview renderers and render manifests
+  src/rezn_ai/eval/      Technical checks, critic scoring, and Weave eval scorers
+  src/rezn_ai/storage/   Redis state, candidate index, feedback, and event streams
+  src/rezn_ai/tracing/   Weave initialization, trace helpers, and eval runners
+  docs/                  Architecture, workflow, sponsor notes, demo plan, ADRs
+  runs/                  Canonical per-run artifacts
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The target workflow is sponsor-native:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. A human enters a creative brief in CopilotKit.
+2. The FastAPI backend starts a batch and writes live state to Redis.
+3. The Weave-traced orchestrator launches several composer agents.
+4. Each candidate writes an arrangement, MIDI, preview audio, metrics, and critic reviews.
+5. Redis streams progress and candidate scores back to the CopilotKit UI.
+6. The human approves, rejects, requests variants, or selects a final candidate.
+7. The harness agent uses feedback to propose the next batch.
+8. Weave evals show whether the refinement loop improved the output.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Quick Start
 
-## Learn More
+Start the sponsor-first backend environment:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+cp .env.example .env
+docker compose up -d redis
+uv sync --extra dev
+uv run --extra dev python scripts/weave_doctor.py
+uv run uvicorn rezn_ai.api.main:app --reload
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Set `WANDB_API_KEY` in `.env` or your shell before expecting traces to appear in the W&B project
+`rezn-ai/rezn-ai`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Then verify the clean composition kernel and provenance workflow:
 
-## Deploy on Vercel
+```bash
+uv run rezn-ai init-run --title "first-light"
+uv run rezn-ai compose runs/first-light --key D# --mode minor --tempo 128 --seed 77
+uv run rezn-ai export-midi runs/first-light
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+After rendering audio from the exported MIDI:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+uv run rezn-ai analyze runs/first-light path/to/render.wav
+uv run rezn-ai finalize runs/first-light path/to/render.wav
+```
+
+The hackathon build should next wire this kernel into the orchestration stack described in
+[`docs/sponsor-architecture.md`](docs/sponsor-architecture.md).
+
+## Design Notes
+
+- The composition layer produces plain JSON before any render work happens.
+- The first reliable demo path should use deterministic preview audio so the loop works without
+  fragile manual rendering.
+- Weave should wrap the orchestration functions, not just isolated helper calls.
+- Redis should store metadata and state, not large WAV blobs.
+- CopilotKit should be the place where human taste changes the next batch.
+- The run manifest is the source of truth for what happened during a creative pass.
