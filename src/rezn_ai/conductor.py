@@ -12,6 +12,7 @@ from typing import Any
 
 import weave
 
+from .agents.harness import APPROVE_BONUS, BASE_WEIGHT, MIN_WEIGHT, REJECT_PENALTY, _allocate
 from .generation.engine import CandidateResult, GeneratorEngine
 from .models import (
     Batch,
@@ -158,6 +159,92 @@ class BatchConductor:
         self._event(batch_id, "batch.final_selected",
                     f"Selected final candidate ({candidate.strategy}).", {"candidate_id": candidate_id})
         return self.store.get_batch(batch_id)
+
+    # ── Feedback-driven refinement (the RL loop) ────────────────────────────────
+
+    def _strategy_weights(self, candidates: list[Candidate]) -> dict[str, float]:
+        """Weight strategies by curation: approvals lift, rejections cut.
+
+        Reuses the harness constants so the API and the CLI refine loop agree.
+        """
+        weights = {c.strategy: BASE_WEIGHT for c in candidates}
+        for c in candidates:
+            if c.status in ("approved", "final"):
+                weights[c.strategy] += APPROVE_BONUS
+            elif c.status == "rejected":
+                weights[c.strategy] = max(MIN_WEIGHT, weights[c.strategy] - REJECT_PENALTY)
+        return weights
+
+    def _best_parent(self, candidates: list[Candidate], strategy: str) -> Candidate:
+        """Pick the parent to mutate for a strategy: approved first, then top score."""
+        pool = [c for c in candidates if c.strategy == strategy]
+        pool.sort(
+            key=lambda c: (c.status in ("approved", "final"), c.technical_score),
+            reverse=True,
+        )
+        return pool[0]
+
+    @weave.op()
+    def refine_batch(self, parent_batch_id: str, candidate_count: int | None = None) -> Batch:
+        """Generate a child batch from a parent's human feedback.
+
+        Strategies that were approved get more of the next batch; rejected ones
+        shrink. Each child is a reproducible mutation of the best parent of its
+        strategy, so the lineage (and the "it improves" story) is traceable.
+        """
+        parent = self.store.get_batch(parent_batch_id)  # raises KeyError if missing
+        parent_candidates = parent.candidates
+        if not parent_candidates:
+            raise ValueError(f"batch {parent_batch_id} has no candidates to refine from")
+
+        weights = self._strategy_weights(parent_candidates)
+        n = candidate_count or parent.brief.candidate_count
+        allocation = _allocate(weights, n)
+        if not allocation:  # all strategies bottomed out — fall back to even spread
+            allocation = [parent_candidates[i % len(parent_candidates)].strategy for i in range(n)]
+
+        approved = [c.candidate_id for c in parent_candidates if c.status in ("approved", "final")]
+        rejected = [c.candidate_id for c in parent_candidates if c.status == "rejected"]
+
+        child_id = new_id("batch")
+        self.store.save_batch(
+            Batch(batch_id=child_id, brief=parent.brief, status="running", parent_batch_id=parent_batch_id)
+        )
+        self._event(
+            child_id, "refine.started",
+            f"Refining {parent_batch_id}: {len(approved)} approved, {len(rejected)} rejected.",
+            {
+                "parent_batch_id": parent_batch_id,
+                "strategy_weights": weights,
+                "approved": approved,
+                "rejected": rejected,
+            },
+        )
+
+        for slot, strategy in enumerate(allocation):
+            parent_cand = self._best_parent(parent_candidates, strategy)
+            result = self.engine.generate_variant(
+                parent.brief, child_id, self.artifacts_root, parent_cand, salt=slot
+            )
+            child = self._to_candidate(result, child_id, parent_id=parent_cand.candidate_id)
+            self.store.save_candidate(child)
+            self._event(
+                child_id, "candidate.generated",
+                f"{child.strategy} (from {parent_cand.candidate_id}) → score {child.technical_score}",
+                {"candidate_id": child.candidate_id, "strategy": child.strategy,
+                 "parent_candidate_id": parent_cand.candidate_id, "technical_score": child.technical_score},
+            )
+
+        batch = self.store.get_batch(child_id)
+        batch.status = "ranked"
+        self.store.save_batch(batch)
+        top = batch.candidates[0].technical_score if batch.candidates else 0.0
+        self._event(
+            child_id, "refine.completed",
+            f"Refined batch ranked {len(batch.candidates)} candidates (top score {top}).",
+            {"parent_batch_id": parent_batch_id, "count": len(batch.candidates), "top_score": top},
+        )
+        return self.store.get_batch(child_id)
 
     # ── Refinement memory ──────────────────────────────────────────────────────
 

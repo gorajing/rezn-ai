@@ -126,6 +126,36 @@ def test_lessons_recorded_after_approval(client) -> None:
     assert "improvement_delta" in lessons[0]
 
 
+def test_refine_creates_child_batch_from_feedback(client) -> None:
+    batch = _start(client, count=4)
+    batch_id = batch["batch_id"]
+    candidates = batch["candidates"]
+
+    # Curate: approve the top, reject the bottom.
+    client.post(f"/api/candidates/{candidates[0]['candidate_id']}/approve")
+    client.post(f"/api/candidates/{candidates[-1]['candidate_id']}/reject", json={"note": "weak"})
+
+    refined = client.post(f"/api/batches/{batch_id}/refine").json()
+    assert refined["batch_id"] != batch_id
+    assert refined["parent_batch_id"] == batch_id
+    assert refined["status"] == "ranked"
+    assert len(refined["candidates"]) == 4
+
+    # children are ranked and carry lineage back to a parent candidate
+    scores = [c["technical_score"] for c in refined["candidates"]]
+    assert scores == sorted(scores, reverse=True)
+    assert all(c["parent_candidate_id"] for c in refined["candidates"])
+
+    events = client.get(f"/api/batches/{refined['batch_id']}/events").json()
+    types = [e["type"] for e in events]
+    assert "refine.started" in types
+    assert "refine.completed" in types
+
+
+def test_refine_missing_batch_404(client) -> None:
+    assert client.post("/api/batches/batch_missing/refine").status_code == 404
+
+
 def test_full_lifecycle_is_reproducible(client) -> None:
     """Same brief twice → identical strategies and seeds (deterministic engine)."""
     first = _start(client, count=4)

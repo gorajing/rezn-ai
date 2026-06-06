@@ -26,6 +26,7 @@ from ..models import (
     Candidate,
     DoctorResponse,
     FeedbackRequest,
+    RefineRequest,
     SelectFinalRequest,
 )
 from ..storage.memory_store import InMemoryStore
@@ -164,6 +165,18 @@ def get_batch_events(batch_id: str) -> list[BatchEvent]:
         return store.get_batch(batch_id).events
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Batch not found") from exc
+
+
+@app.post("/api/batches/{batch_id}/refine", response_model=Batch)
+def refine_batch(batch_id: str, request: RefineRequest | None = None) -> Batch:
+    """Generate a child batch from this batch's approve/reject feedback."""
+    count = request.candidate_count if request else None
+    try:
+        return conductor.refine_batch(batch_id, candidate_count=count)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Batch not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/batches/{batch_id}/select-final", response_model=Batch)

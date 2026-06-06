@@ -78,6 +78,7 @@ class Batch(BaseModel):
     candidate_ids: list[str] = Field(default_factory=list)  # ranked, best first
     events: list[BatchEvent] = Field(default_factory=list)
     selected_final_id: str | None = None
+    parent_batch_id: str | None = None  # set when this batch was refined from another
     created_at: str = Field(default_factory=utc_now)
     # Populated on read from the candidate store; not persisted on the batch record.
     candidates: list[Candidate] = Field(default_factory=list)
@@ -108,6 +109,11 @@ class FeedbackRequest(BaseModel):
 
 class SelectFinalRequest(BaseModel):
     candidate_id: str
+
+
+class RefineRequest(BaseModel):
+    # Optional override of how many candidates the refined batch should contain.
+    candidate_count: int | None = Field(default=None, ge=1, le=12)
 
 
 class DoctorResponse(BaseModel):
