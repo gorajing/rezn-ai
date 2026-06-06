@@ -125,11 +125,13 @@ class BatchModel(weave.Model):
         mode: str,
         tempo: float,
         candidate_count: int = 2,
+        **_: Any,  # absorb extra dataset columns (e.g. "id")
     ) -> dict[str, Any]:
         """Run one batch and return the top-ranked candidate for scoring."""
         from pathlib import Path as _Path
         from ..agents.schemas import CreativeBrief
         from ..agents.orchestrator import orchestrate_batch
+        from ..provenance import read_json
 
         brief = CreativeBrief(
             text=text, key=key, mode=mode, tempo=tempo,
@@ -137,10 +139,21 @@ class BatchModel(weave.Model):
         )
         result = orchestrate_batch(brief, _Path(self.runs_root), base_seed=self.base_seed)
         top = result["candidates"][0] if result.get("candidates") else {}
+
+        # score_completeness needs the arrangement structure (parts + sections),
+        # so load the arrangement JSON rather than passing the path string.
+        arrangement: dict[str, Any] = {}
+        path = top.get("arrangement_path")
+        if path:
+            try:
+                arrangement = read_json(_Path(path))
+            except (OSError, ValueError):
+                arrangement = {}
+
         return {
             "technical_score": top.get("technical_score", 0.0),
             "strategy": top.get("strategy", ""),
-            "arrangement": top.get("arrangement_path"),  # path only; avoid large blobs
+            "arrangement": arrangement,
             "batch_id": result.get("batch_id"),
         }
 
