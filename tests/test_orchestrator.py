@@ -23,6 +23,9 @@ def test_batch_creates_scored_ranked_candidates(tmp_path):
     assert scores == sorted(scores, reverse=True)
     assert [r["rank"] for r in summary["ranking"]] == [1, 2, 3]
 
+    # the scorer must DISCRIMINATE: candidates should not all score identically
+    assert len(set(scores)) > 1, f"scorer did not discriminate: {scores}"
+
     # each candidate produced real artifacts on disk
     for candidate in summary["candidates"]:
         cand_dir = tmp_path / "t-batch" / "candidates" / candidate["candidate_id"]

@@ -21,6 +21,21 @@ session resets — read "Current State" first.
 
 ## Worklog
 
+### 2026-06-06 (later) — Decision: generator; pushed branch; discriminating scorer
+
+- Team decision (Jin, lead): committing to the **generator**, not the Ableton mix conductor.
+  Vinay re-points his backend (Redis/API/UI/tests reused, mix domain dropped). Chris owns CopilotKit.
+- Pushed `origin/generator` (commit 6ba4155) so teammates build against the real engine + a committed
+  contract instead of chat messages.
+- Added `docs/API_CONTRACT.md` — single source of truth: engine signature, REST endpoints, Redis key
+  mapping, CopilotKit actions. Backend + frontend both build to it.
+- Reworked `eval/scoring.py` to DISCRIMINATE: musical quality (harmonic variety, voice leading,
+  tonal resolution, register range) gated by validity. Verified on real demo-batch: scores spread
+  0.613–0.746, ranked, with per-feature `reasons`. Resolves the "all 1.0" gap.
+- Tests: 16 -> 19 passing (added `test_scoring.py` + a discrimination guard in the orchestrator test).
+- Note: variety/range are constant across candidates (shared DEFAULT_FORM); voice-leading + resolution
+  carry the per-seed signal. Honest and explainable, but a future lever is per-strategy form variation.
+
 ### 2026-06-06 (later) — Sponsor stack: Weave step
 
 - Decision: judged sponsor hackathon — Weave, Redis, CopilotKit must all be *genuinely* used.

@@ -110,7 +110,8 @@ via `useCopilotReadable` so natural-language commands resolve to a candidate.
 
 ## Open items
 
-- `technical_score` must become a real discriminator (currently a pass/fail gate that returns 1.0 for
-  valid candidates). Owned by Jin. Until then, ranking is not meaningful — do not demo ranking.
+- ~~`technical_score` must become a real discriminator.~~ DONE — scorer now grades musical quality
+  (harmonic variety, voice leading, tonal resolution, register range) gated by validity. Candidates
+  spread ~0.61–0.75 with explainable `score_detail.features` and `reasons`. Ranking is meaningful.
 - Weave trace link per candidate: surfaced once `weave.init` runs with a key; field name TBD.
 - Variant/refinement semantics (parent → child seed strategy) finalized with the refinement loop.
