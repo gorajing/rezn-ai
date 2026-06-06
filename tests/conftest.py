@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import os
 
-# The default app store/conductor are built at import time. Force the in-memory
-# store so the suite never connects to a real Redis/Redis Cloud database, even if
-# the developer has REDIS_URL exported. Set before importing the app module.
+# Keep the suite hermetic: no real Redis, no W&B network, no live inference — even
+# when the developer has a populated .env (initialize_weave() loads .env, so we
+# pre-set empty creds here; load_project_env only fills vars NOT already present).
+# Set before importing the app module / anything that calls initialize_weave.
 os.environ.setdefault("REZN_DISABLE_REDIS", "1")
+os.environ.setdefault("WANDB_API_KEY", "")          # -> initialize_weave() no-ops, never hits wandb.ai
+os.environ.setdefault("WANDB_INFERENCE_API_KEY", "")
+os.environ.setdefault("OPENAI_API_KEY", "")
+os.environ.setdefault("REZN_ENABLE_INFERENCE", "0")  # deterministic agents, no live LLM calls
+os.environ.setdefault("WANDB_MODE", "disabled")      # belt-and-suspenders: keep wandb fully offline
 
 import fakeredis
 import pytest

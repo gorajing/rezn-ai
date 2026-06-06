@@ -15,6 +15,7 @@ from .music.midi import export_midi_parts
 from .project import create_run, require_run_dir
 from .provenance import read_json, record_artifact, record_event, write_json
 from .render.preview_synth import preview_path_for_candidate, write_preview_wav
+from .tracing.weave_client import initialize_weave
 
 
 def _cmd_init_run(args: argparse.Namespace) -> int:
@@ -57,6 +58,7 @@ def _cmd_export_midi(args: argparse.Namespace) -> int:
 
 
 def _cmd_batch(args: argparse.Namespace) -> int:
+    initialize_weave()  # init before the first @weave.op so the batch is one nested trace
     brief = CreativeBrief(
         text=args.brief,
         key=args.key,
@@ -77,6 +79,7 @@ def _cmd_batch(args: argparse.Namespace) -> int:
 
 
 def _cmd_refine(args: argparse.Namespace) -> int:
+    initialize_weave()  # init before the first @weave.op so the refine is one nested trace
     batch_json = Path(args.batch_json).resolve()
     prev_summary = read_json(batch_json)
     runs_root = batch_json.parent.parent
