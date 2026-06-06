@@ -1,8 +1,9 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* REZN control room is a fixed premium dark surface (demo-stable). */
+  --background: #08080b;
+  --foreground: #ededf2;
 }
 
 @theme inline {
@@ -12,15 +13,84 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Ambient brand glow behind the whole app. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(55rem 55rem at 12% -8%, rgba(139, 92, 246, 0.14), transparent 60%),
+    radial-gradient(45rem 45rem at 105% 0%, rgba(34, 211, 238, 0.08), transparent 55%),
+    radial-gradient(40rem 40rem at 50% 120%, rgba(99, 102, 241, 0.08), transparent 60%);
+}
+
+/* Thin, premium scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+::selection {
+  background: rgba(139, 92, 246, 0.35);
+}
+
+/* Equalizer bars for the audio waveform. */
+@keyframes rezn-eq {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* Shimmer for loading skeletons. */
+@keyframes rezn-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Soft entrance for newly added cards / messages. */
+@keyframes rezn-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rezn-rise {
+  animation: rezn-rise 0.35s ease-out both;
 }
