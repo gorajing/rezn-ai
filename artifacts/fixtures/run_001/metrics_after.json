@@ -1,0 +1,16 @@
+{
+  "integrated_lufs": -12.6,
+  "stereo_width": 0.43,
+  "duration_seconds": 16.0,
+  "sample_rate": 44100,
+  "n_channels": 2,
+  "bands": {
+    "sub": 0.11,
+    "bass": 0.31,
+    "low_mid": 0.27,
+    "mid": 0.3,
+    "hi_mid": 0.2,
+    "high": 0.12
+  }
+}
+
