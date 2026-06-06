@@ -1,11 +1,9 @@
+# Optional: local Redis for offline development.
+# The app defaults to Redis Cloud (see .env.example / REDIS_URL). Use this only
+# if you want a local Redis instead: `docker compose up -d redis`, then set
+# REDIS_URL=redis://localhost:6379/0 in your .env.
 services:
   redis:
-    image: redis:7-alpine
+    image: redis:7
     ports:
       - "6379:6379"
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redis-data:/data
-
-volumes:
-  redis-data:

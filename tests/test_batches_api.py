@@ -1,0 +1,165 @@
+"""API integration tests for the generator, across InMemory and fakeredis stores."""
+
+from __future__ import annotations
+
+
+def _brief(count: int = 2) -> dict:
+    return {
+        "prompt": "Hypnotic progressive electronic loop, driving, wide, clean low end",
+        "key": "F#",
+        "mode": "minor",
+        "tempo": 128,
+        "candidate_count": count,
+    }
+
+
+def _start(client, count: int = 2) -> dict:
+    response = client.post("/api/batches", json={"brief": _brief(count)})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+# ── Doctor ────────────────────────────────────────────────────────────────────
+
+def test_doctor_reports_engine_ready(client) -> None:
+    body = client.get("/api/doctor").json()
+    assert body["checks"]["generator_engine"] is True
+    assert body["checks"]["weave_import"] is True
+    assert "redis" in body["checks"]
+    assert body["ok"] is True
+
+
+# ── Batch generation + ranking ─────────────────────────────────────────────────
+
+def test_start_batch_returns_ranked_candidates(client) -> None:
+    batch = _start(client, count=3)
+    assert batch["status"] == "ranked"
+    candidates = batch["candidates"]
+    assert len(candidates) == 3
+    # Ranked best-first by technical_score.
+    scores = [c["technical_score"] for c in candidates]
+    assert scores == sorted(scores, reverse=True)
+    first = candidates[0]
+    assert first["audio_url"].endswith("preview.wav")
+    assert first["arrangement_url"].endswith("arrangement.json")
+    assert first["strategy"]
+    assert first["reasons"]
+
+
+def test_get_batch_and_events(client) -> None:
+    batch = _start(client)
+    batch_id = batch["batch_id"]
+
+    fetched = client.get(f"/api/batches/{batch_id}").json()
+    assert fetched["batch_id"] == batch_id
+    assert len(fetched["candidates"]) == 2
+
+    events = client.get(f"/api/batches/{batch_id}/events").json()
+    types = [e["type"] for e in events]
+    assert "batch.started" in types
+    assert "candidate.generated" in types
+    assert "batch.ranked" in types
+
+
+def test_get_batch_not_found(client) -> None:
+    assert client.get("/api/batches/batch_missing").status_code == 404
+
+
+def test_get_candidate(client) -> None:
+    batch = _start(client)
+    cid = batch["candidates"][0]["candidate_id"]
+    candidate = client.get(f"/api/candidates/{cid}").json()
+    assert candidate["candidate_id"] == cid
+    assert candidate["status"] == "generated"
+    assert "technical_score" in candidate
+
+
+def test_get_candidate_not_found(client) -> None:
+    assert client.get("/api/candidates/cand_missing").status_code == 404
+
+
+# ── Curation ────────────────────────────────────────────────────────────────────
+
+def test_approve_candidate(client) -> None:
+    batch = _start(client)
+    cid = batch["candidates"][0]["candidate_id"]
+    approved = client.post(f"/api/candidates/{cid}/approve").json()
+    assert approved["status"] == "approved"
+
+
+def test_reject_candidate_records_note(client) -> None:
+    batch = _start(client)
+    cid = batch["candidates"][0]["candidate_id"]
+    rejected = client.post(f"/api/candidates/{cid}/reject", json={"note": "too sparse"}).json()
+    assert rejected["status"] == "rejected"
+    assert rejected["feedback"] == "too sparse"
+
+
+def test_request_variant_creates_child(client) -> None:
+    batch = _start(client)
+    parent_id = batch["candidates"][0]["candidate_id"]
+    child = client.post(f"/api/candidates/{parent_id}/variant", json={"note": "more energy"}).json()
+    assert child["parent_candidate_id"] == parent_id
+    assert child["candidate_id"] != parent_id
+    # The variant joins the same batch ranking.
+    refreshed = client.get(f"/api/batches/{batch['batch_id']}").json()
+    assert any(c["candidate_id"] == child["candidate_id"] for c in refreshed["candidates"])
+
+
+def test_select_final(client) -> None:
+    batch = _start(client)
+    batch_id = batch["batch_id"]
+    cid = batch["candidates"][0]["candidate_id"]
+    completed = client.post(f"/api/batches/{batch_id}/select-final", json={"candidate_id": cid}).json()
+    assert completed["status"] == "completed"
+    assert completed["selected_final_id"] == cid
+
+
+# ── Refinement memory ───────────────────────────────────────────────────────────
+
+def test_lessons_recorded_after_approval(client) -> None:
+    batch = _start(client)
+    cid = batch["candidates"][0]["candidate_id"]
+    client.post(f"/api/candidates/{cid}/approve")
+    lessons = client.get("/api/lessons").json()
+    assert len(lessons) >= 1
+    assert "improvement_delta" in lessons[0]
+
+
+def test_refine_creates_child_batch_from_feedback(client) -> None:
+    batch = _start(client, count=4)
+    batch_id = batch["batch_id"]
+    candidates = batch["candidates"]
+
+    # Curate: approve the top, reject the bottom.
+    client.post(f"/api/candidates/{candidates[0]['candidate_id']}/approve")
+    client.post(f"/api/candidates/{candidates[-1]['candidate_id']}/reject", json={"note": "weak"})
+
+    refined = client.post(f"/api/batches/{batch_id}/refine").json()
+    assert refined["batch_id"] != batch_id
+    assert refined["parent_batch_id"] == batch_id
+    assert refined["status"] == "ranked"
+    assert len(refined["candidates"]) == 4
+
+    # children are ranked and carry lineage back to a parent candidate
+    scores = [c["technical_score"] for c in refined["candidates"]]
+    assert scores == sorted(scores, reverse=True)
+    assert all(c["parent_candidate_id"] for c in refined["candidates"])
+
+    events = client.get(f"/api/batches/{refined['batch_id']}/events").json()
+    types = [e["type"] for e in events]
+    assert "refine.started" in types
+    assert "refine.completed" in types
+
+
+def test_refine_missing_batch_404(client) -> None:
+    assert client.post("/api/batches/batch_missing/refine").status_code == 404
+
+
+def test_full_lifecycle_is_reproducible(client) -> None:
+    """Same brief twice → identical strategies and seeds (deterministic engine)."""
+    first = _start(client, count=4)
+    second = _start(client, count=4)
+    sig1 = sorted((c["strategy"], c["seed"]) for c in first["candidates"])
+    sig2 = sorted((c["strategy"], c["seed"]) for c in second["candidates"])
+    assert sig1 == sig2

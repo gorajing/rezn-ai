@@ -1,0 +1,119 @@
+"""RedisStore unit tests (fakeredis) for batches, candidates, events, memory.
+
+Covers the three data structures:
+  - Sorted Sets : candidate ranking by technical_score + refinement lessons
+  - Streams     : per-batch event log
+  - Hashes      : per-candidate state
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from rezn_ai.models import Batch, BatchEvent, Candidate, CreativeBrief, MemoryLesson
+from rezn_ai.storage.redis_store import batch_events_key, lessons_key
+
+
+def _brief() -> CreativeBrief:
+    return CreativeBrief(prompt="test loop", key="F#", mode="minor", tempo=128.0, candidate_count=3)
+
+
+def _batch(batch_id: str = "batch_test") -> Batch:
+    return Batch(batch_id=batch_id, brief=_brief(), status="running")
+
+
+def _candidate(batch_id: str, cid: str, score: float, strategy: str = "groove_architect") -> Candidate:
+    return Candidate(
+        candidate_id=cid, batch_id=batch_id, strategy=strategy, seed=7,
+        key="F#", mode="minor", tempo=128.0, technical_score=score,
+        scores={"coverage": 1.0}, reasons=["ok"], audio_url="/artifacts/x/preview.wav",
+        midi_urls={"bass": "/artifacts/x/midi/bass.mid"},
+    )
+
+
+# ── Batches ─────────────────────────────────────────────────────────────────
+
+def test_save_and_get_batch(redis_store):
+    redis_store.save_batch(_batch("batch_a"))
+    fetched = redis_store.get_batch("batch_a")
+    assert fetched.batch_id == "batch_a"
+    assert fetched.status == "running"
+    assert fetched.candidates == []
+
+
+def test_get_missing_batch_raises(redis_store):
+    with pytest.raises(KeyError):
+        redis_store.get_batch("nope")
+
+
+def test_candidates_not_persisted_on_batch_record(redis_store):
+    batch = _batch("batch_b")
+    batch.candidates = [_candidate("batch_b", "cand_x", 0.5)]
+    redis_store.save_batch(batch)
+    # Reload: candidates come from the ranking sorted set, not the batch JSON.
+    assert redis_store.get_batch("batch_b").candidates == []
+
+
+# ── Candidates + ranking (Sorted Set + Hash) ────────────────────────────────
+
+def test_save_and_get_candidate_roundtrip(redis_store):
+    redis_store.save_candidate(_candidate("batch_c", "cand_1", 0.7))
+    got = redis_store.get_candidate("cand_1")
+    assert got.candidate_id == "cand_1"
+    assert got.technical_score == 0.7
+    assert got.scores == {"coverage": 1.0}
+    assert got.midi_urls == {"bass": "/artifacts/x/midi/bass.mid"}
+
+
+def test_get_missing_candidate_raises(redis_store):
+    with pytest.raises(KeyError):
+        redis_store.get_candidate("ghost")
+
+
+def test_ranked_candidates_sorted_by_score_desc(redis_store):
+    redis_store.save_candidate(_candidate("batch_d", "low", 0.2))
+    redis_store.save_candidate(_candidate("batch_d", "high", 0.9))
+    redis_store.save_candidate(_candidate("batch_d", "mid", 0.5))
+    ranked = redis_store.get_ranked_candidates("batch_d")
+    assert [c.candidate_id for c in ranked] == ["high", "mid", "low"]
+
+
+# ── Events (Stream) ──────────────────────────────────────────────────────────
+
+def test_append_event_writes_stream_and_batch(redis_store, fake_redis_client):
+    redis_store.save_batch(_batch("batch_e"))
+    redis_store.append_event("batch_e", BatchEvent(type="batch.started", message="go"))
+    batch = redis_store.get_batch("batch_e")
+    assert len(batch.events) == 1
+    stream = fake_redis_client.xrange(batch_events_key("batch_e"))
+    assert len(stream) == 1
+    assert stream[0][1]["type"] == "batch.started"
+
+
+# ── Refinement memory (Sorted Set) ───────────────────────────────────────────
+
+def test_remember_and_recall_ranks_by_delta(redis_store):
+    redis_store.remember(MemoryLesson(body="weak", strategy="texture_builder"), improvement_delta=0.1)
+    redis_store.remember(MemoryLesson(body="strong", strategy="groove_architect"), improvement_delta=0.9)
+    top = redis_store.recall_top_lessons(5)
+    assert top[0].body == "strong"
+    assert top[0].improvement_delta == 0.9
+    assert top[0].strategy == "groove_architect"
+
+
+def test_recall_empty(redis_store):
+    assert redis_store.recall_top_lessons(5) == []
+
+
+# ── Healthcheck ───────────────────────────────────────────────────────────────
+
+def test_doctor_status_all_true_when_connected(redis_store):
+    status = redis_store.doctor_status()
+    assert status["redis_ping"] is True
+    assert status["sorted_set_accessible"] is True
+    assert status["streams_accessible"] is True
+    assert status["hashes_accessible"] is True
+
+
+def test_lessons_key_is_namespaced():
+    assert lessons_key() == "rezn:lessons:global"

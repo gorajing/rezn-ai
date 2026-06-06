@@ -1,12 +1,204 @@
-"""Placeholder module for deterministic preview rendering.
+"""Deterministic preview rendering from arrangement JSON.
 
-The first implementation should render simple WAV previews directly from arrangement JSON so the
-multi-agent loop can be demonstrated without depending on a manual DAW bounce.
+Renders an ``arrangement.json`` payload into a stereo 16-bit PCM WAV using only the
+standard library. The output is fully deterministic: the same arrangement always
+produces byte-identical audio, which keeps preview audio inside the clean-room
+boundary (newly rendered audio created for a run, no imported assets).
 """
 
 from __future__ import annotations
 
+import math
+import struct
+import wave
+from array import array
 from pathlib import Path
+from typing import Any
+
+SAMPLE_RATE = 44_100
+CHANNELS = 2
+TARGET_PEAK = 0.89  # leaves headroom so the release "peak_ok" check passes
+TAIL_SECONDS = 0.75  # let final note releases ring out
+
+# General MIDI percussion notes used by the composer's drum part.
+KICK, SNARE, CLOSED_HAT, CRASH = 36, 38, 42, 49
+
+# Per-part mix: (gain, pan) where pan is -1.0 (left) .. 1.0 (right).
+PART_MIX: dict[str, tuple[float, float]] = {
+    "harmony": (0.42, -0.12),
+    "texture": (0.34, 0.22),
+    "bass": (0.85, 0.0),
+    "drums": (0.9, 0.0),
+}
+DEFAULT_MIX = (0.4, 0.0)
+
+
+def _freq(pitch: int) -> float:
+    return 440.0 * (2.0 ** ((pitch - 69) / 12.0))
+
+
+def _noise_sequence(length: int, seed: int) -> list[float]:
+    """Deterministic [-1, 1] noise via a small LCG (no global RNG state)."""
+    out: list[float] = []
+    state = (seed * 2_654_435_761 + 1) & 0xFFFFFFFF
+    for _ in range(length):
+        state = (1_103_515_245 * state + 12_345) & 0x7FFFFFFF
+        out.append((state / 0x3FFFFFFF) - 1.0)
+    return out
+
+
+def _pitched_tone(freq: float, dur_samples: int, sample_rate: int) -> list[float]:
+    """Mild additive tone with attack/decay envelope. Returns mono samples."""
+    attack = max(1, int(0.006 * sample_rate))
+    release = max(1, int(0.04 * sample_rate))
+    samples: list[float] = []
+    two_pi_f = 2.0 * math.pi * freq
+    for i in range(dur_samples):
+        t = i / sample_rate
+        wave_value = (
+            math.sin(two_pi_f * t)
+            + 0.32 * math.sin(2.0 * two_pi_f * t)
+            + 0.14 * math.sin(3.0 * two_pi_f * t)
+        ) / 1.46
+        if i < attack:
+            env = i / attack
+        elif i > dur_samples - release:
+            env = max(0.0, (dur_samples - i) / release)
+        else:
+            env = 1.0
+        # gentle exponential body decay so sustained chords don't sound static
+        env *= math.exp(-1.4 * t)
+        samples.append(wave_value * env)
+    return samples
+
+
+def _drum_hit(pitch: int, dur_samples: int, sample_rate: int, seed: int) -> list[float]:
+    samples: list[float] = []
+    if pitch == KICK:
+        decay = 0.18
+        for i in range(dur_samples):
+            t = i / sample_rate
+            freq = 50.0 + 90.0 * math.exp(-32.0 * t)  # pitch drop
+            samples.append(math.sin(2.0 * math.pi * freq * t) * math.exp(-t / decay))
+        return samples
+    if pitch == SNARE:
+        decay = 0.14
+        noise = _noise_sequence(dur_samples, seed)
+        for i in range(dur_samples):
+            t = i / sample_rate
+            tone = 0.4 * math.sin(2.0 * math.pi * 180.0 * t)
+            samples.append((0.85 * noise[i] + tone) * math.exp(-t / decay))
+        return samples
+    if pitch == CLOSED_HAT:
+        decay = 0.035
+        noise = _noise_sequence(dur_samples, seed)
+        for i in range(dur_samples):
+            t = i / sample_rate
+            samples.append(noise[i] * math.exp(-t / decay))
+        return samples
+    # crash / other cymbals
+    decay = 0.55
+    noise = _noise_sequence(dur_samples, seed)
+    for i in range(dur_samples):
+        t = i / sample_rate
+        samples.append(0.7 * noise[i] * math.exp(-t / decay))
+    return samples
+
+
+def _pan_gains(pan: float) -> tuple[float, float]:
+    # constant-power panning
+    angle = (pan + 1.0) * (math.pi / 4.0)
+    return math.cos(angle), math.sin(angle)
+
+
+def render_arrangement(
+    arrangement: dict[str, Any],
+    *,
+    sample_rate: int = SAMPLE_RATE,
+    max_seconds: float | None = None,
+) -> tuple[array, array, int]:
+    """Render an arrangement to (left, right, sample_rate) float buffers in [-1, 1].
+
+    ``max_seconds`` caps the render length (used by the API for short, snappy
+    previews); ``None`` renders the full arrangement.
+    """
+    tempo = float(arrangement["identity"]["tempo"])
+    seconds_per_beat = 60.0 / tempo
+    total_beats = float(arrangement["form"]["total_beats"])
+    total_samples = int(math.ceil((total_beats * seconds_per_beat + TAIL_SECONDS) * sample_rate))
+    if max_seconds is not None:
+        total_samples = min(total_samples, max(1, int(max_seconds * sample_rate)))
+
+    left = array("d", bytes(8 * total_samples))
+    right = array("d", bytes(8 * total_samples))
+
+    # Cache rendered voices so repeated chords/patterns are only synthesized once.
+    pitched_cache: dict[tuple[int, int], list[float]] = {}
+    hit_index = 0
+
+    for part, notes in sorted(arrangement.get("parts", {}).items()):
+        gain, pan = PART_MIX.get(part, DEFAULT_MIX)
+        lgain, rgain = _pan_gains(pan)
+        is_drums = part == "drums"
+        for note in notes:
+            start_sample = int(round(float(note["start"]) * seconds_per_beat * sample_rate))
+            dur_samples = max(1, int(round(float(note["duration"]) * seconds_per_beat * sample_rate)))
+            pitch = int(note["pitch"])
+            velocity = int(note["velocity"])
+            amp = (velocity / 127.0) * gain
+
+            if is_drums:
+                voice = _drum_hit(pitch, dur_samples, sample_rate, seed=hit_index)
+                hit_index += 1
+            else:
+                key = (pitch, dur_samples)
+                voice = pitched_cache.get(key)
+                if voice is None:
+                    voice = _pitched_tone(_freq(pitch), dur_samples, sample_rate)
+                    pitched_cache[key] = voice
+
+            end = min(start_sample + len(voice), total_samples)
+            for i in range(start_sample, end):
+                value = voice[i - start_sample] * amp
+                left[i] += value * lgain
+                right[i] += value * rgain
+
+    return left, right, sample_rate
+
+
+def _normalize_to_int16(left: array, right: array) -> bytes:
+    peak = 0.0
+    for value in left:
+        peak = max(peak, abs(value))
+    for value in right:
+        peak = max(peak, abs(value))
+    scale = (TARGET_PEAK / peak) if peak > 0 else 0.0
+
+    frames = bytearray()
+    pack = struct.Struct("<hh").pack
+    for l_value, r_value in zip(left, right, strict=True):
+        l_int = max(-32768, min(32767, int(l_value * scale * 32767)))
+        r_int = max(-32768, min(32767, int(r_value * scale * 32767)))
+        frames += pack(l_int, r_int)
+    return bytes(frames)
+
+
+def write_preview_wav(
+    arrangement: dict[str, Any],
+    path: Path,
+    *,
+    sample_rate: int = SAMPLE_RATE,
+    max_seconds: float | None = None,
+) -> Path:
+    left, right, rate = render_arrangement(arrangement, sample_rate=sample_rate, max_seconds=max_seconds)
+    pcm = _normalize_to_int16(left, right)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(CHANNELS)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(pcm)
+    return path
 
 
 def preview_path_for_candidate(candidate_dir: Path) -> Path:

@@ -65,6 +65,19 @@ def initialize_weave(project: str | None = None) -> WeaveStatus:
     return WeaveStatus(project_name, available=True, initialized=True, reason="ok")
 
 
+def weave_workspace_url(project: str | None = None) -> str | None:
+    """The W&B Weave workspace URL for the project (``entity/project``), or None.
+
+    A batch/project-level link the UI can surface today; per-call deep links can
+    layer on later via the Weave call API.
+    """
+    project_name = project or default_project_name()
+    if "/" not in project_name:
+        return None
+    entity, name = project_name.split("/", 1)
+    return f"https://wandb.ai/{entity}/{name}/weave"
+
+
 def weave_op(name: str | None = None) -> Any:
     try:
         import weave  # type: ignore
