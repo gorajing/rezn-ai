@@ -42,6 +42,20 @@ def test_batch_creates_scored_ranked_candidates(tmp_path):
     assert "batch.completed" in event_types
 
 
+def test_batch_records_critic_enrichment(tmp_path):
+    brief = CreativeBrief(text="x", key="D#", mode="minor", tempo=128.0, candidate_count=2)
+    summary = orchestrate_batch(brief, tmp_path, run_title="crit", base_seed=10, sample_rate=8_000)
+
+    for candidate in summary["candidates"]:
+        assert 0.0 <= candidate["critic_score"] <= 1.0
+        assert candidate["critic_source"]  # records provenance of the critic opinion
+        score_json = json.loads(
+            (tmp_path / "crit" / "candidates" / candidate["candidate_id"] / "score.json").read_text()
+        )
+        assert "critic" in score_json
+        assert 0.0 <= score_json["critic"]["critic_score"] <= 1.0
+
+
 def test_batch_is_deterministic(tmp_path):
     brief = CreativeBrief(text="x", key="A", mode="minor", tempo=120.0, candidate_count=2)
     a = orchestrate_batch(brief, tmp_path / "a", base_seed=5, sample_rate=8_000)

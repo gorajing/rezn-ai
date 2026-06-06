@@ -8,8 +8,8 @@ from pathlib import Path
 from . import config
 from .eval.audio_metrics import measure_wav
 from .eval.mix_checks import evaluate_metrics
-from .agents.orchestrator import orchestrate_batch
-from .agents.schemas import CreativeBrief
+from .agents.orchestrator import orchestrate_batch, refine_batch
+from .agents.schemas import CreativeBrief, HumanFeedback
 from .music.composition import compose_arrangement
 from .music.midi import export_midi_parts
 from .project import create_run, require_run_dir
@@ -71,6 +71,24 @@ def _cmd_batch(args: argparse.Namespace) -> int:
         base_seed=args.seed,
     )
     print(f"batch {summary['batch_id']} -> {summary['candidate_count']} candidates")
+    for row in summary["ranking"]:
+        print(f"  #{row['rank']} {row['candidate_id']}  score={row['technical_score']}")
+    return 0
+
+
+def _cmd_refine(args: argparse.Namespace) -> int:
+    batch_json = Path(args.batch_json).resolve()
+    prev_summary = read_json(batch_json)
+    runs_root = batch_json.parent.parent
+    feedback = [HumanFeedback(cid, "approve", args.note) for cid in args.approve]
+    feedback += [HumanFeedback(cid, "reject", args.note) for cid in args.reject]
+    summary = refine_batch(prev_summary, feedback, runs_root, run_title=args.title)
+    print(
+        f"refine {summary['batch_id']} (parent {summary['parent_batch_id']}) "
+        f"-> {summary['candidate_count']} candidates"
+    )
+    for line in summary["rationale"]:
+        print(f"  {line}")
     for row in summary["ranking"]:
         print(f"  #{row['rank']} {row['candidate_id']}  score={row['technical_score']}")
     return 0
@@ -162,6 +180,17 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--seed", type=int, default=77, help="base seed")
     batch.add_argument("--root", default=".", help="project root")
     batch.set_defaults(func=_cmd_batch)
+
+    refine = sub.add_parser(
+        "refine",
+        help="run a feedback-driven refinement batch from a prior batch.json",
+    )
+    refine.add_argument("batch_json", help="path to a prior batch's batch.json")
+    refine.add_argument("--approve", nargs="*", default=[], metavar="CAND_ID", help="candidate ids to approve")
+    refine.add_argument("--reject", nargs="*", default=[], metavar="CAND_ID", help="candidate ids to reject")
+    refine.add_argument("--title", default=None, help="child batch folder name")
+    refine.add_argument("--note", default="", help="optional feedback note")
+    refine.set_defaults(func=_cmd_refine)
 
     analyze = sub.add_parser("analyze", help="measure a rendered WAV")
     analyze.add_argument("run_dir")
