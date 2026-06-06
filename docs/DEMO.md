@@ -90,6 +90,7 @@ arrangement, and object-storage for artifacts to scale beyond one instance.
 **Links:**
 - Repo: https://github.com/gorajing/rezn-ai
 - Weave workspace: https://wandb.ai/rezn-ai/rezn-ai/weave
+- Weave Evaluation (`rezn-batch-quality`): https://wandb.ai/rezn-ai/rezn-ai/weave/evaluations
 - Demo video: _add after recording_
 
 ---

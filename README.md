@@ -13,6 +13,12 @@ The project is intentionally built around the WeaveHacks sponsor stack:
 - **Run folders** remain the clean-room source of truth for arrangements, MIDI, preview renders,
   metrics, notes, and final manifests.
 
+## Links
+
+- **W&B Weave workspace:** <https://wandb.ai/rezn-ai/rezn-ai/weave>
+- **Weave Evaluations** (`rezn-batch-quality` — `technical_score` + `completeness` over a fixed
+  3-brief set): <https://wandb.ai/rezn-ai/rezn-ai/weave/evaluations>
+
 ## Goals
 
 - Generate several original candidates from the same creative brief.
@@ -33,8 +39,8 @@ The project is intentionally built around the WeaveHacks sponsor stack:
 
 ```text
 rezn-ai/
-  apps/web/              CopilotKit operator interface
-  services/api/          FastAPI orchestration and event API
+  app/                   Next.js + CopilotKit operator Control Room (frontend)
+  src/rezn_ai/api/       FastAPI orchestration and event API
   src/rezn_ai/           Python package and CLI
   src/rezn_ai/agents/    Orchestrator, composer, critic, and harness agents
   src/rezn_ai/music/     Music theory, arrangement, composition, and MIDI export
@@ -115,8 +121,11 @@ The hackathon build should next wire this kernel into the orchestration stack de
 ## Frontend (CopilotKit Control Room)
 
 The web frontend is a Next.js (App Router) app that lives at the repository root in `app/`.
-It is wired with CopilotKit as a verified foundation (provider + runtime endpoint + one demo
-readable and one demo action). The full operator dashboard is intentionally not built yet.
+It is the **Control Room** operator UI, wired to the live API (`app/lib/api.ts`): enter a brief
+to generate a batch, play preview audio, approve/reject candidates, **refine the next batch from
+feedback**, and select a final — with live Weave/Redis status from `/api/doctor`. CopilotKit is
+wired as the conversational layer (provider + `/api/copilotkit` runtime). Point it at the API with
+`NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`).
 
 Requirements: Node.js 20.9+.
 
