@@ -62,15 +62,37 @@ The target workflow is sponsor-native:
 Start the sponsor-first backend environment:
 
 ```bash
-cp .env.example .env
-docker compose up -d redis
+cp .env.example .env          # then fill in Redis Cloud + W&B credentials (see below)
 uv sync --extra dev
-uv run --extra dev python scripts/weave_doctor.py
-uv run uvicorn rezn_ai.api.main:app --reload
+uv run --env-file .env python scripts/redis_doctor.py   # verify Redis Cloud
+uv run --env-file .env python scripts/weave_doctor.py   # verify Weave
+uv run --env-file .env uvicorn rezn_ai.api.main:app --reload
 ```
 
-Set `WANDB_API_KEY` in `.env` or your shell before expecting traces to appear in the W&B project
-`rezn-ai/rezn-ai`.
+`uv run --env-file .env` loads your `.env` for that command. Set `WANDB_API_KEY`
+before expecting traces in the W&B project `rezn-ai/rezn-ai`.
+
+### Redis Cloud setup
+
+Live run state, the event stream, ranked lesson memory, and per-track fix history
+are stored in Redis. The app defaults to **Redis Cloud**:
+
+1. Create a database at <https://app.redislabs.com> (the free tier is enough).
+2. Open **Databases > (your DB) > Connect** and copy:
+   - the **public endpoint** (`host:port`), and
+   - the **Default user password**.
+   This database password is what goes in the connection string — it is *not* the
+   account-level Cloud API key (that key is only for the management REST API).
+3. Put it in `.env` as `REDIS_URL=rediss://default:<password>@<host>:<port>`
+   (use `rediss://` when TLS is enabled on the database; otherwise `redis://`).
+   Or set the discrete `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_TLS`
+   fields instead.
+4. Verify: `uv run --env-file .env python scripts/redis_doctor.py` should report
+   `"redis_ping": true` with the three data structures accessible.
+
+Set `REDIS_REQUIRED=true` once configured so a bad endpoint fails loudly instead
+of silently falling back to the in-memory store. To develop offline without the
+cloud, run `docker compose up -d redis` and set `REDIS_URL=redis://localhost:6379/0`.
 
 Then verify the clean composition kernel and provenance workflow:
 

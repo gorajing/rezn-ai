@@ -1,17 +1,18 @@
-.venv/
-.pytest_cache/
-__pycache__/
-*.py[cod]
 .DS_Store
 .env
 .env.*
 !.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
 node_modules/
-.next/
-coverage/
 dist/
-build/
+artifacts/runs/
+
 *.egg-info/
+build/
+dist/
 .rocketride/
 
 # Local editor/tooling rules (rocketride plugin)
@@ -21,3 +22,5 @@ build/
 # Generated run artifacts (large WAVs); keep the folder, not its contents
 runs/*
 !runs/.gitkeep
+artifacts/runs/
+artifacts/batches/
