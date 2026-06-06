@@ -158,6 +158,7 @@ def _llm_propose_plan(brief: CreativeBrief, strategy: str) -> PlanProposal:
         model=model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         temperature=0.9,
+        max_tokens=600,  # headroom so the JSON object is never truncated
     )
     return _coerce_plan(strategy, _parse_json_object(response.choices[0].message.content or ""))
 
@@ -228,6 +229,7 @@ def _llm_critique(arrangement: dict, metrics: dict, brief: CreativeBrief) -> Cri
         model=model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         temperature=0.3,
+        max_tokens=500,  # headroom so the JSON object is never truncated
     )
     return _coerce_critique(_parse_json_object(response.choices[0].message.content or ""))
 
