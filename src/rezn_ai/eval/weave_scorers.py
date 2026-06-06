@@ -124,37 +124,45 @@ class BatchModel(weave.Model):
         key: str,
         mode: str,
         tempo: float,
-        candidate_count: int = 2,
+        candidate_count: int = 1,
         **_: Any,  # absorb extra dataset columns (e.g. "id")
     ) -> dict[str, Any]:
-        """Run one batch and return the top-ranked candidate for scoring."""
+        """Score one composition for the brief using the real scorer.
+
+        Deliberately lightweight: composes + renders a short preview + scores
+        inline (no multi-candidate batch, no per-op arrangement logging), so the
+        Weave trace stays tiny and the evaluation flushes quickly. It exercises
+        the same composition engine + technical_score the full pipeline uses.
+        """
         from pathlib import Path as _Path
-        from ..agents.schemas import CreativeBrief
-        from ..agents.orchestrator import orchestrate_batch
-        from ..provenance import read_json
+        from uuid import uuid4
 
-        brief = CreativeBrief(
-            text=text, key=key, mode=mode, tempo=tempo,
-            candidate_count=candidate_count,
+        from ..eval.audio_metrics import measure_wav
+        from ..eval.mix_checks import evaluate_metrics
+        from ..eval.scoring import technical_score
+        from ..music.composition import compose_arrangement
+        from ..render.preview_synth import write_preview_wav
+
+        arrangement = compose_arrangement(
+            title=f"eval:{text[:24]}", key=key, mode=mode, tempo=tempo, seed=self.base_seed
         )
-        result = orchestrate_batch(brief, _Path(self.runs_root), base_seed=self.base_seed)
-        top = result["candidates"][0] if result.get("candidates") else {}
+        out = _Path(self.runs_root) / f"eval-{uuid4().hex[:8]}.wav"
+        write_preview_wav(arrangement, out, sample_rate=8_000, max_seconds=4.0)
+        metrics = measure_wav(out)
+        checks = evaluate_metrics(metrics, min_duration_seconds=1.0)
+        score = technical_score(arrangement, metrics, checks)
 
-        # score_completeness needs the arrangement structure (parts + sections),
-        # so load the arrangement JSON rather than passing the path string.
-        arrangement: dict[str, Any] = {}
-        path = top.get("arrangement_path")
-        if path:
-            try:
-                arrangement = read_json(_Path(path))
-            except (OSError, ValueError):
-                arrangement = {}
-
+        parts = arrangement.get("parts", {})
+        sections = arrangement.get("form", {}).get("sections", [])
         return {
-            "technical_score": top.get("technical_score", 0.0),
-            "strategy": top.get("strategy", ""),
-            "arrangement": arrangement,
-            "batch_id": result.get("batch_id"),
+            "technical_score": score["technical_score"],
+            "musical_quality": score.get("musical_quality", 0.0),
+            # Small arrangement summary (no note arrays) for the structural scorers.
+            "arrangement": {
+                "identity": arrangement.get("identity", {}),
+                "parts": {name: [] for name in parts},
+                "form": {"sections": sections},
+            },
         }
 
 
