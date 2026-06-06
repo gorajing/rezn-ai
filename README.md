@@ -90,6 +90,39 @@ uv run rezn-ai finalize runs/first-light path/to/render.wav
 The hackathon build should next wire this kernel into the orchestration stack described in
 [`docs/sponsor-architecture.md`](docs/sponsor-architecture.md).
 
+## Frontend (CopilotKit Control Room)
+
+The web frontend is a Next.js (App Router) app that lives at the repository root in `app/`.
+It is wired with CopilotKit as a verified foundation (provider + runtime endpoint + one demo
+readable and one demo action). The full operator dashboard is intentionally not built yet.
+
+Requirements: Node.js 20.9+.
+
+```bash
+# from the repository root
+npm install
+cp .env.local.example .env.local   # then set OPENAI_API_KEY
+npm run dev                         # http://localhost:3000
+```
+
+`OPENAI_API_KEY` is required for the copilot to generate responses. Without it the app still
+builds and runs, but the `/api/copilotkit` endpoint returns a `503` until the key is set.
+
+What is wired today:
+
+- `app/layout.tsx` - wraps the app in the `CopilotKit` provider (`runtimeUrl="/api/copilotkit"`).
+- `app/api/copilotkit/route.ts` - the CopilotKit runtime endpoint (OpenAI service adapter).
+- `app/components/copilot-demo.tsx` - a `CopilotPopup` plus one `useCopilotReadable`
+  (mission status) and one `useCopilotAction` (`setMissionStatus`).
+- `app/page.tsx` - renders the existing control-room UI and mounts the demo component.
+
+Other useful commands:
+
+```bash
+npm run lint     # ESLint (flat config)
+npm run build    # production build
+```
+
 ## Design Notes
 
 - The composition layer produces plain JSON before any render work happens.

@@ -1,3 +1,5 @@
+import { CopilotDemo } from "./components/copilot-demo";
+
 export default function Home() {
   return (
     <main className="min-h-screen bg-black text-white p-8">
@@ -7,9 +9,13 @@ export default function Home() {
           REZN Conductor
         </h1>
 
-        <p className="text-zinc-400 mb-10">
+        <p className="text-zinc-400 mb-2">
           Multi-Agent Music Production Control Room
         </p>
+
+        <div className="mb-10">
+          <CopilotDemo />
+        </div>
 
         <div className="grid grid-cols-3 gap-6">
 
