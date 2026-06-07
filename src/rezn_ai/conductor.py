@@ -596,7 +596,8 @@ class BatchConductor:
                 f"{candidate.strategy} → score {candidate.technical_score}",
                 {"candidate_id": candidate.candidate_id, "strategy": candidate.strategy,
                  "technical_score": candidate.technical_score,
-                 "agent_id": composer_agent_id(candidate.strategy), "role": "composer"},
+                 "agent_id": composer_agent_id(candidate.strategy), "role": "composer",
+                 "phase": "batch"},
             )
 
         batch = self.store.get_batch(batch_id)

@@ -101,9 +101,17 @@ This is the part that makes it demonstrable. Two surfaces, one event source.
   `app/control-room/ControlRoom.tsx`.
 
 ### 4.3 Event contract
-- Every agent step emits a `BatchEvent` with `agent_id`, `phase`, `weave_op`, and a
-  short human message (the conductor already emits batch events; extend payloads with
-  `agent_id` + `weave_call_id` so the UI and Weave line up).
+- Agent identity rides in the **event payload**, not new top-level `BatchEvent` fields
+  (so no store/serialization/`api-types.ts` migration). Every agent-tagged event carries
+  `payload.agent_id`, `payload.role`, and `payload.phase` (`batch`/`refine`/…) + a short
+  human message. The orchestrator/critics/judge emit dedicated `agent.step` events; the
+  composers are tagged on the existing `candidate.generated` event (the Agent Room groups
+  on `payload.agent_id` regardless of event type).
+- **Weave alignment is via per-agent sessions, not event fields.** Each agent runs inside
+  `weave_session(agent_name=…)` (see `conductor._agent_scope`), so the Agents view lines up
+  without a `weave_op`/`weave_call_id` on every event. Per-candidate traces already ride on
+  the candidate's own `weave_call_id` → `trace_url`. (Phase 1 intentionally omits the
+  earlier-sketched `weave_op` event field — it had no consumer.)
 
 ## 5. Key design decisions
 
