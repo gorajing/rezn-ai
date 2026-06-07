@@ -34,6 +34,7 @@ class CreativeBrief(BaseModel):
     key: str = "F#"
     mode: Literal["major", "minor"] = "minor"
     tempo: float = 128.0
+    energy: float = Field(default=0.5, ge=0.0, le=1.0)  # 0.5 neutral; set from the interpreted brief
     candidate_count: int = Field(default=4, ge=1, le=12)
     taste_constraints: list[str] = Field(
         default_factory=lambda: ["original only", "no sampling", "no artist cloning"]

@@ -19,6 +19,8 @@ import json
 import os
 from dataclasses import asdict, dataclass
 
+from ..music.brief_parser import parse_musical_brief
+from ..music.theory import PITCH_CLASSES, normalize_key
 from ..tracing.weave_client import weave_op
 from .schemas import CreativeBrief
 
@@ -248,3 +250,78 @@ def critique(arrangement: dict, metrics: dict, brief: CreativeBrief) -> Critique
             reasons=fallback.reasons + (f"llm_error:{type(exc).__name__}",),
             source=f"fallback:{type(exc).__name__}",
         )
+
+
+# --------------------------------------------------------------------------- #
+# interpret_brief: read the whole prompt -> musical parameters (the "understanding")
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class BriefInterpretation:
+    """What the system understood from the prompt. Traced so it's visible in Weave."""
+
+    key: str
+    mode: str
+    tempo: float
+    energy: float  # 0..1, 0.5 is neutral
+    intent: str
+    source: str  # "wandb_inference" | "fallback" | "fallback:<Reason>"
+
+
+def _coerce_interpretation(raw: dict, fb: dict) -> BriefInterpretation:
+    key = normalize_key(str(raw.get("key", fb["key"])))
+    if key not in PITCH_CLASSES:
+        key = fb["key"]
+    mode = raw.get("mode")
+    if mode not in ("major", "minor"):
+        mode = fb["mode"]
+    try:
+        tempo = max(60.0, min(190.0, float(raw.get("tempo", fb["tempo"]))))
+    except (TypeError, ValueError):
+        tempo = fb["tempo"]
+    try:
+        energy = max(0.0, min(1.0, float(raw.get("energy", fb["energy"]))))
+    except (TypeError, ValueError):
+        energy = fb["energy"]
+    intent = str(raw.get("intent", "")).strip()[:200] or "interpreted from brief"
+    return BriefInterpretation(key, mode, tempo, energy, intent, "wandb_inference")
+
+
+def _llm_interpret(prompt: str, fb: dict) -> BriefInterpretation:
+    client, model = _inference_client()
+    system = (
+        "You translate a music creative brief into concrete parameters. Respond with "
+        "a compact JSON object only: key (e.g. 'F#','C'), mode ('major'|'minor'), "
+        "tempo (BPM integer), energy (0..1), intent (<=15 words capturing the vibe). "
+        "Honor any explicit key or BPM in the brief; infer the rest from genre, mood, "
+        "instruments, and references."
+    )
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": f"Brief: {prompt}"}],
+        temperature=0.4,
+        max_tokens=300,
+    )
+    return _coerce_interpretation(_parse_json_object(response.choices[0].message.content or ""), fb)
+
+
+@weave_op("interpret_brief")
+def interpret_brief(
+    prompt: str, *, default_mode: str = "minor", default_tempo: float = 120.0
+) -> BriefInterpretation:
+    """Read the whole prompt into musical parameters (W&B Inference, deterministic fallback)."""
+    fb = parse_musical_brief(prompt, default_mode=default_mode, default_tempo=default_tempo)
+    fallback = BriefInterpretation(
+        key=str(fb["key"]),
+        mode=str(fb["mode"]),
+        tempo=float(fb["tempo"]),
+        energy=float(fb["energy"]),
+        intent="keyword interpretation",
+        source="fallback",
+    )
+    if not inference_enabled():
+        return fallback
+    try:
+        return _llm_interpret(prompt, fb)
+    except Exception as exc:  # best-effort; degrade to the deterministic interpretation
+        return BriefInterpretation(**{**asdict(fallback), "source": f"fallback:{type(exc).__name__}"})

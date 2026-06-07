@@ -13,8 +13,8 @@ from typing import Any
 import weave
 
 from .agents.harness import APPROVE_BONUS, BASE_WEIGHT, MIN_WEIGHT, REJECT_PENALTY, _allocate
+from .agents.llm_agents import interpret_brief
 from .generation.engine import CandidateResult, GeneratorEngine
-from .music.brief_parser import parse_musical_brief
 from .tracing.weave_client import weave_workspace_url
 from .models import (
     Batch,
@@ -67,18 +67,26 @@ class BatchConductor:
 
     @weave.op()
     def start_batch(self, request: BatchCreateRequest) -> Batch:
-        # The prompt drives the music: infer key/mode/tempo from the brief text
-        # (explicit "88 BPM" / "F# minor" win; genre -> tempo, mood -> mode, and a
-        # stable key from the text) so different prompts sound genuinely different.
+        # The prompt drives the music: interpret the whole brief into key/mode/tempo/
+        # energy (W&B Inference when enabled, deterministic keyword fallback otherwise).
+        # interpret_brief is Weave-traced, so the "prompt -> musical decisions" step is
+        # visible in the trace.
         raw = request.brief
-        params = parse_musical_brief(raw.prompt, default_mode=raw.mode, default_tempo=raw.tempo)
-        brief = raw.model_copy(update=params)
+        interp = interpret_brief(raw.prompt, default_mode=raw.mode, default_tempo=raw.tempo)
+        brief = raw.model_copy(
+            update={"key": interp.key, "mode": interp.mode, "tempo": interp.tempo, "energy": interp.energy}
+        )
         batch_id = new_id("batch")
         self.store.save_batch(Batch(batch_id=batch_id, brief=brief, status="running"))
         self._event(
             batch_id, "batch.started",
-            f"{brief.prompt} → {brief.key} {brief.mode}, {brief.tempo:.0f} BPM, {brief.candidate_count} candidates",
-            {"candidate_count": brief.candidate_count, "key": brief.key, "mode": brief.mode, "tempo": brief.tempo},
+            f"{brief.prompt} → {brief.key} {brief.mode}, {brief.tempo:.0f} BPM "
+            f"(energy {brief.energy:.2f}) · {interp.intent}",
+            {
+                "candidate_count": brief.candidate_count,
+                "key": brief.key, "mode": brief.mode, "tempo": brief.tempo, "energy": brief.energy,
+                "intent": interp.intent, "interpretation_source": interp.source,
+            },
         )
 
         memories = self.store.recall_top_lessons(5)

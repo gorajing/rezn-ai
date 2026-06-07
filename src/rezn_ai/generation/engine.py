@@ -129,6 +129,7 @@ class LocalGeneratorEngine:
             tempo=params.tempo,
             seed=params.seed,
             strategy=params.strategy,
+            energy=getattr(brief, "energy", 0.5),
         )
         arrangement_path = candidate_dir / "arrangement.json"
         write_json(arrangement_path, arrangement)

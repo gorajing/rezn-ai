@@ -54,6 +54,16 @@ _MAJOR_WORDS = (
     "nostalgic", "hopeful", "euphoric", "joyful", "gentle", "playful",
 )
 
+# Energy (0..1): 0.5 is neutral and leaves the composition unchanged.
+_HIGH_ENERGY = (
+    "aggressive", "driving", "energetic", "banging", "hard", "intense", "fast",
+    "euphoric", "pounding", "relentless", "peak", "festival", "hype", "anthemic",
+)
+_LOW_ENERGY = (
+    "calm", "ambient", "gentle", "slow", "mellow", "chill", "soft", "sparse",
+    "minimal", "quiet", "dreamy", "sleepy", "downtempo", "lo-fi", "lofi", "relaxed",
+)
+
 _KEY_MODE_RE = re.compile(r"\b([a-g][#b]?)\s*(minor|major|min|maj)\b", re.I)
 _KEY_ONLY_RE = re.compile(r"\b(?:in|key of)\s+([a-g][#b]?)\b", re.I)
 _BPM_RE = re.compile(r"(\d{2,3})\s*bpm", re.I)
@@ -111,4 +121,12 @@ def parse_musical_brief(
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
         key = _KEYS[int(digest[:8], 16) % len(_KEYS)]
 
-    return {"key": key, "mode": mode, "tempo": tempo}
+    # Energy from intensity words (0.5 neutral).
+    if any(w in text for w in _HIGH_ENERGY):
+        energy = 0.8
+    elif any(w in text for w in _LOW_ENERGY):
+        energy = 0.3
+    else:
+        energy = 0.5
+
+    return {"key": key, "mode": mode, "tempo": tempo, "energy": energy}

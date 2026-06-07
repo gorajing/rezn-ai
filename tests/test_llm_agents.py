@@ -42,6 +42,22 @@ def test_critique_fallback_in_range(monkeypatch):
     assert result.reasons
 
 
+def test_interpret_brief_fallback_reads_whole_prompt(monkeypatch):
+    _force_offline(monkeypatch)
+    from rezn_ai.agents.llm_agents import interpret_brief
+
+    warm = interpret_brief("Warm lo-fi beat with a nostalgic Rhodes, 88 BPM")
+    assert warm.tempo == 88.0  # explicit BPM
+    assert warm.mode == "major"  # "warm"
+    assert warm.energy < 0.5  # "lo-fi" -> calmer
+    assert warm.source == "fallback"
+
+    hard = interpret_brief("Aggressive dark techno, pounding")
+    assert hard.tempo == 128.0  # techno
+    assert hard.mode == "minor"  # "dark"
+    assert hard.energy > 0.5  # "aggressive"
+
+
 def test_critique_fallback_is_deterministic(monkeypatch):
     _force_offline(monkeypatch)
     arrangement = {"parts": {"harmony": [{}] * 60}, "identity": {}}
