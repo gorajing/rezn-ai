@@ -178,13 +178,14 @@ def resolve_kit(*, genre: str | None, strategy: str, energy: float, seed: int) -
     so the default render stays byte-identical."""
     if strategy == "default":
         return DrumKit.kernel()
-    base = GENRE_KITS.get(genre or "electronic", DrumKit.kernel())
+    family = genre or "electronic"  # techno/electronic detect as None -> electronic family
+    base = GENRE_KITS.get(family, DrumKit.kernel())
     feats = _kit_features(base)
     for key, delta in STRATEGY_KIT_BIAS.get(strategy, {}).items():
         feats[key] = feats.get(key, FEATURE_SPECS[key].default) + delta
     digest = hashlib.sha256(f"{seed}|{strategy}".encode("utf-8")).hexdigest()
     feats["hat.brightness"] = feats["hat.brightness"] + ((int(digest[:8], 16) % 7) - 3) * 0.01
-    return _apply_features(base, feats, name=f"{genre or 'kernel'}:{strategy}")
+    return _apply_features(base, feats, name=f"{family}:{strategy}")
 
 
 def apply_taste(kit: DrumKit, taste: dict[str, float], *, pull: float = 0.3) -> DrumKit:

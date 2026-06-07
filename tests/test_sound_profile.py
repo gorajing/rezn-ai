@@ -39,6 +39,12 @@ def test_resolve_kit_default_is_kernel():
     assert resolve_kit(genre=None, strategy="default", energy=0.5, seed=1) == DrumKit.kernel()
 
 
+def test_resolve_kit_name_reflects_resolved_family():
+    # genre=None falls back to the electronic family — the name must say so, not "kernel".
+    assert resolve_kit(genre=None, strategy="groove_architect", energy=0.5, seed=1).name == "electronic:groove_architect"
+    assert resolve_kit(genre="house", strategy="groove_architect", energy=0.5, seed=1).name == "house:groove_architect"
+
+
 def test_resolve_kit_deterministic_and_distinct_per_strategy():
     a = resolve_kit(genre=None, strategy="groove_architect", energy=0.5, seed=1)
     b = resolve_kit(genre=None, strategy="texture_builder", energy=0.5, seed=1)
