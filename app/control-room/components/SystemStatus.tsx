@@ -10,14 +10,12 @@ const STATE_LABEL: Record<ServiceStatus["state"], string> = {
 
 export function SystemStatus({ services }: { services: ServiceStatus[] }) {
   return (
-    <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 backdrop-blur-xl">
+    <div className="rounded-2xl border border-line bg-surface p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted">
           System Status
         </h3>
-        <span className="text-[10px] uppercase tracking-wider text-emerald-300/80">
-          Sponsor stack
-        </span>
+        <span className="text-[10px] uppercase tracking-wider text-accent">Sponsor stack</span>
       </div>
 
       <ul className="space-y-2.5">
@@ -26,12 +24,10 @@ export function SystemStatus({ services }: { services: ServiceStatus[] }) {
             <StatusDot state={s.state} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-zinc-200">{s.label}</span>
-                <span className="text-[11px] font-medium text-zinc-400">
-                  {STATE_LABEL[s.state]}
-                </span>
+                <span className="text-sm font-medium text-fg">{s.label}</span>
+                <span className="text-[11px] font-medium text-muted">{STATE_LABEL[s.state]}</span>
               </div>
-              <p className="truncate text-xs text-zinc-500">{s.detail}</p>
+              <p className="truncate text-xs text-subtle">{s.detail}</p>
             </div>
           </li>
         ))}

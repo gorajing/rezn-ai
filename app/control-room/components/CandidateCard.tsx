@@ -4,25 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import type { Candidate, CandidateStatus } from "../types";
 import { Waveform } from "./Waveform";
 import { ScoreRing } from "./ScoreRing";
-import {
-  CheckIcon,
-  PauseIcon,
-  PlayIcon,
-  StarIcon,
-  TraceIcon,
-  WandIcon,
-  XIcon,
-} from "./icons";
+import { CheckIcon, PauseIcon, PlayIcon, StarIcon, TraceIcon, WandIcon, XIcon } from "./icons";
 
 const STATUS_PILL: Record<CandidateStatus, { label: string; cls: string }> = {
-  generated: { label: "New", cls: "border-white/10 bg-white/[0.04] text-zinc-400" },
-  approved: { label: "Approved", cls: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" },
-  rejected: { label: "Rejected", cls: "border-rose-400/30 bg-rose-500/10 text-rose-200" },
-  variant_requested: {
-    label: "Variant requested",
-    cls: "border-amber-400/30 bg-amber-500/10 text-amber-200",
-  },
-  final: { label: "Final pick", cls: "border-emerald-400/40 bg-emerald-500/15 text-emerald-100" },
+  generated: { label: "New", cls: "border-line-2 bg-surface-2 text-muted" },
+  approved: { label: "Approved", cls: "border-good/30 bg-good/10 text-good" },
+  rejected: { label: "Rejected", cls: "border-bad/30 bg-bad/10 text-bad" },
+  variant_requested: { label: "Variant requested", cls: "border-warn/30 bg-warn/10 text-warn" },
+  final: { label: "Final pick", cls: "border-good/40 bg-good/15 text-good" },
 };
 
 function fmt(sec: number): string {
@@ -58,7 +47,6 @@ export function CandidateCard({
   const isFinal = candidate.status === "final";
   const isRejected = candidate.status === "rejected";
 
-  // Drive the real <audio> element from the shared `playing` state.
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
@@ -66,7 +54,6 @@ export function CandidateCard({
     else el.pause();
   }, [playing]);
 
-  // Progress: from the real audio when we have a preview, else a simulated bar.
   useEffect(() => {
     if (hasAudio) {
       const el = audioRef.current;
@@ -87,27 +74,27 @@ export function CandidateCard({
   return (
     <article
       className={[
-        "rezn-rise group relative flex flex-col gap-4 rounded-2xl border p-4 backdrop-blur-xl transition-all",
+        "rezn-rise group relative flex flex-col gap-4 rounded-2xl border p-4",
         isFinal
-          ? "border-emerald-400/40 bg-emerald-500/[0.06] shadow-lg shadow-emerald-500/10"
-          : "border-white/[0.08] bg-white/[0.03] hover:border-white/[0.16] hover:bg-white/[0.05]",
+          ? "border-good/40 bg-good/[0.06] shadow-lg shadow-good/10"
+          : "border-line bg-surface hover:border-line-2 hover:bg-surface-2",
         isRejected ? "opacity-55" : "",
       ].join(" ")}
     >
       {/* Header: rank + identity + score */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white/[0.06] text-sm font-semibold text-zinc-200">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-surface-3 font-mono text-sm font-medium text-fg">
             #{candidate.rank || "•"}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="truncate text-sm font-semibold text-zinc-100">{candidate.label}</h3>
+              <h3 className="truncate text-sm font-semibold text-fg">{candidate.label}</h3>
               <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${pill.cls}`}>
                 {pill.label}
               </span>
             </div>
-            <p className="mt-0.5 font-mono text-[11px] text-zinc-500">{candidate.id}</p>
+            <p className="mt-0.5 font-mono text-[11px] text-subtle">{candidate.id}</p>
           </div>
         </div>
 
@@ -118,8 +105,8 @@ export function CandidateCard({
             className={[
               "grid h-8 w-8 place-items-center rounded-lg border transition-colors",
               isFinal
-                ? "border-emerald-400/40 bg-emerald-500/20 text-emerald-200"
-                : "border-white/10 text-zinc-500 hover:border-emerald-400/30 hover:text-emerald-200",
+                ? "border-good/40 bg-good/15 text-good"
+                : "border-line-2 text-subtle hover:border-good/30 hover:text-good",
             ].join(" ")}
           >
             <StarIcon className="h-4 w-4" />
@@ -129,16 +116,14 @@ export function CandidateCard({
       </div>
 
       {/* Meta chips */}
-      <div className="flex flex-wrap gap-1.5 text-[11px] text-zinc-400">
-        {[`${candidate.key} ${candidate.mode}`, `${candidate.tempo} BPM`, fmt(candidate.durationSec)].map(
-          (chip) => (
-            <span key={chip} className="rounded-md bg-white/[0.04] px-2 py-0.5">
-              {chip}
-            </span>
-          ),
-        )}
+      <div className="flex flex-wrap gap-1.5 text-[11px] text-muted">
+        <span className="rounded-md bg-surface-2 px-2 py-0.5">
+          {candidate.key} {candidate.mode}
+        </span>
+        <span className="rounded-md bg-surface-2 px-2 py-0.5 font-mono">{candidate.tempo} BPM</span>
+        <span className="rounded-md bg-surface-2 px-2 py-0.5 font-mono">{fmt(candidate.durationSec)}</span>
         {candidate.parentId && (
-          <span className="rounded-md border border-amber-400/20 bg-amber-500/10 px-2 py-0.5 text-amber-200/80">
+          <span className="rounded-md border border-warn/20 bg-warn/10 px-2 py-0.5 text-warn">
             refined variant
           </span>
         )}
@@ -149,14 +134,14 @@ export function CandidateCard({
         {hasAudio && <audio ref={audioRef} src={candidate.audioUrl} preload="none" />}
         <button
           onClick={onTogglePlay}
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-cyan-400 text-black shadow-lg shadow-violet-500/20 transition-transform hover:scale-105"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-accent text-bg shadow-lg shadow-accent/20 transition-transform hover:scale-105"
           aria-label={playing ? "Pause" : "Play"}
         >
           {playing ? <PauseIcon className="h-4 w-4" /> : <PlayIcon className="h-4 w-4 translate-x-[1px]" />}
         </button>
         <div className="min-w-0 flex-1">
-          <Waveform seed={candidate.id} playing={playing} />
-          <div className="mt-1 flex justify-between font-mono text-[10px] text-zinc-600">
+          <Waveform seed={candidate.id} progress={progress} playing={playing} />
+          <div className="mt-1 flex justify-between font-mono text-[10px] text-subtle">
             <span>{fmt(candidate.durationSec * progress)}</span>
             <span>{fmt(candidate.durationSec)}</span>
           </div>
@@ -164,8 +149,8 @@ export function CandidateCard({
       </div>
 
       {/* Top reason */}
-      <p className="flex items-center gap-1.5 text-xs text-zinc-400">
-        <span className="text-cyan-300/80">◆</span>
+      <p className="flex items-center gap-1.5 text-xs text-muted">
+        <span className="text-accent">◆</span>
         {candidate.reasons[0]}
       </p>
 
@@ -185,33 +170,23 @@ export function CandidateCard({
           onClick={onReject}
           icon={<XIcon className="h-3.5 w-3.5" />}
         />
-        <ActionButton
-          label="Variant"
-          tone="variant"
-          onClick={onVariant}
-          icon={<WandIcon className="h-3.5 w-3.5" />}
-        />
-        <ActionButton
-          label="Trace"
-          tone="trace"
-          onClick={onTrace}
-          icon={<TraceIcon className="h-3.5 w-3.5" />}
-        />
+        <ActionButton label="Variant" tone="variant" onClick={onVariant} icon={<WandIcon className="h-3.5 w-3.5" />} />
+        <ActionButton label="Trace" tone="trace" onClick={onTrace} icon={<TraceIcon className="h-3.5 w-3.5" />} />
       </div>
     </article>
   );
 }
 
 const TONES = {
-  approve: "hover:border-emerald-400/40 hover:bg-emerald-500/10 hover:text-emerald-200",
-  reject: "hover:border-rose-400/40 hover:bg-rose-500/10 hover:text-rose-200",
-  variant: "hover:border-violet-400/40 hover:bg-violet-500/10 hover:text-violet-200",
-  trace: "hover:border-cyan-400/40 hover:bg-cyan-500/10 hover:text-cyan-200",
+  approve: "hover:border-good/40 hover:bg-good/10 hover:text-good",
+  reject: "hover:border-bad/40 hover:bg-bad/10 hover:text-bad",
+  variant: "hover:border-accent/40 hover:bg-accent-dim hover:text-accent",
+  trace: "hover:border-accent/40 hover:bg-accent-dim hover:text-accent",
 } as const;
 
 const ACTIVE_TONES = {
-  approve: "border-emerald-400/40 bg-emerald-500/15 text-emerald-200",
-  reject: "border-rose-400/40 bg-rose-500/15 text-rose-200",
+  approve: "border-good/40 bg-good/15 text-good",
+  reject: "border-bad/40 bg-bad/15 text-bad",
   variant: "",
   trace: "",
 } as const;
@@ -234,9 +209,7 @@ function ActionButton({
       onClick={onClick}
       className={[
         "flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2 text-xs font-medium transition-colors",
-        active
-          ? ACTIVE_TONES[tone]
-          : `border-white/10 bg-white/[0.02] text-zinc-400 ${TONES[tone]}`,
+        active ? ACTIVE_TONES[tone] : `border-line-2 bg-surface-2 text-muted ${TONES[tone]}`,
       ].join(" ")}
     >
       {icon}

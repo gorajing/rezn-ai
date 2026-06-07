@@ -1,16 +1,65 @@
 @import "tailwindcss";
 
-:root {
-  /* REZN control room is a fixed premium dark surface (demo-stable). */
-  --background: #08080b;
-  --foreground: #ededf2;
+/* ── Theme tokens ──────────────────────────────────────────────────────────
+   A single class on <body> (theme-dark | theme-light) swaps every color.
+   Components never hardcode color; they use the Tailwind aliases below. */
+
+body.theme-dark {
+  --bg: #0d0c0a;
+  --surface: #141310;
+  --surface2: #1a1916;
+  --surface3: #2a2720;
+  --border: rgba(255, 220, 160, 0.07);
+  --border2: rgba(255, 220, 160, 0.16);
+  --accent: #e8a87c;
+  --accent-dim: rgba(232, 168, 124, 0.12);
+  --green: #4ade80;
+  --amber: #fbbf24;
+  --red: #f87171;
+  --text-primary: #f2ede6;
+  --text-secondary: #8a8070;
+  --text-tertiary: #4a453d;
+  --glow: rgba(232, 168, 124, 0.10);
+  color-scheme: dark;
 }
 
+body.theme-light {
+  --bg: #faf8f5;
+  --surface: #f4f1ec;
+  --surface2: #ffffff;
+  --surface3: #ede9e3;
+  --border: rgba(0, 0, 0, 0.07);
+  --border2: rgba(0, 0, 0, 0.14);
+  --accent: #e8611a;
+  --accent-dim: rgba(232, 97, 26, 0.10);
+  --green: #16a34a;
+  --amber: #d97706;
+  --red: #dc2626;
+  --text-primary: #1a1814;
+  --text-secondary: #6b6456;
+  --text-tertiary: #a89e92;
+  --glow: rgba(232, 97, 26, 0.05);
+  color-scheme: light;
+}
+
+/* Tailwind color/font aliases → resolve to the active theme's raw tokens. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface2);
+  --color-surface-3: var(--surface3);
+  --color-line: var(--border);
+  --color-line-2: var(--border2);
+  --color-accent: var(--accent);
+  --color-accent-dim: var(--accent-dim);
+  --color-good: var(--green);
+  --color-warn: var(--amber);
+  --color-bad: var(--red);
+  --color-fg: var(--text-primary);
+  --color-muted: var(--text-secondary);
+  --color-subtle: var(--text-tertiary);
+  --font-sans: var(--font-dm-sans);
+  --font-mono: var(--font-dm-mono);
 }
 
 html,
@@ -18,16 +67,29 @@ body {
   height: 100%;
 }
 
+/* Lock the viewport — the control room owns all scrolling internally. */
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
-    "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* Ambient brand glow behind the whole app. */
+/* Smooth theme switch on every element (colors only — never transforms). */
+*,
+*::before,
+*::after {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease,
+    fill 0.3s ease, stroke 0.3s ease;
+}
+
+/* Ambient accent glow behind the app. */
 body::before {
   content: "";
   position: fixed;
@@ -35,33 +97,26 @@ body::before {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(55rem 55rem at 12% -8%, rgba(139, 92, 246, 0.14), transparent 60%),
-    radial-gradient(45rem 45rem at 105% 0%, rgba(34, 211, 238, 0.08), transparent 55%),
-    radial-gradient(40rem 40rem at 50% 120%, rgba(99, 102, 241, 0.08), transparent 60%);
+    radial-gradient(50rem 50rem at 12% -8%, var(--glow), transparent 60%),
+    radial-gradient(42rem 42rem at 104% 0%, var(--glow), transparent 55%);
 }
 
-/* Thin, premium scrollbars. */
+/* Hide scrollbars everywhere. */
 * {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-*::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 9999px;
-}
-*::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 ::selection {
-  background: rgba(139, 92, 246, 0.35);
+  background: var(--accent-dim);
 }
 
-/* Equalizer bars for the audio waveform. */
+/* ── Animations ────────────────────────────────────────────────────────── */
 @keyframes rezn-eq {
   0%,
   100% {
@@ -71,15 +126,11 @@ body::before {
     transform: scaleY(1);
   }
 }
-
-/* Shimmer for loading skeletons. */
 @keyframes rezn-shimmer {
   100% {
     transform: translateX(100%);
   }
 }
-
-/* Soft entrance for newly added cards / messages. */
 @keyframes rezn-rise {
   from {
     opacity: 0;
@@ -90,7 +141,27 @@ body::before {
     transform: translateY(0);
   }
 }
+@keyframes rezn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes rezn-pulse-border {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
 
 .rezn-rise {
   animation: rezn-rise 0.35s ease-out both;
+}
+.rezn-spin {
+  animation: rezn-spin 0.7s linear infinite;
+}
+.rezn-pulse-border {
+  animation: rezn-pulse-border 1.4s ease-in-out infinite;
 }

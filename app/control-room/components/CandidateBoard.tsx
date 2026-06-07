@@ -29,18 +29,14 @@ export function CandidateBoard(props: CandidateBoardProps) {
     return <EmptyState onExample={props.onExample} />;
   }
 
-  const approved = candidates.filter(
-    (c) => c.status === "approved" || c.status === "final",
-  ).length;
+  const approved = candidates.filter((c) => c.status === "approved" || c.status === "final").length;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-end justify-between gap-4 px-6 pb-4 pt-5">
         <div className="min-w-0">
-          <p className="text-[11px] uppercase tracking-wider text-zinc-500">Current brief</p>
-          <h2 className="truncate text-lg font-semibold text-zinc-100">
-            {prompt ?? "Untitled batch"}
-          </h2>
+          <p className="text-[10px] uppercase tracking-wider text-subtle">Current brief</p>
+          <h2 className="truncate text-lg font-semibold text-fg">{prompt ?? "Untitled batch"}</h2>
         </div>
         {batchStatus !== "generating" && (
           <div className="flex shrink-0 items-center gap-4 text-right">
@@ -50,7 +46,7 @@ export function CandidateBoard(props: CandidateBoardProps) {
               <button
                 onClick={props.onRefine}
                 title="Generate the next batch, weighted by your approvals & rejections"
-                className="flex items-center gap-1.5 rounded-xl border border-violet-400/40 bg-violet-500/15 px-3 py-2 text-xs font-medium text-violet-100 transition-colors hover:bg-violet-500/25"
+                className="flex items-center gap-1.5 rounded-xl border border-accent/40 bg-accent-dim px-3 py-2 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
               >
                 <SparkIcon className="h-3.5 w-3.5" />
                 Refine from feedback
@@ -88,8 +84,8 @@ export function CandidateBoard(props: CandidateBoardProps) {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-lg font-semibold tabular-nums text-zinc-100">{value}</div>
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</div>
+      <div className="font-mono text-lg font-medium tabular-nums text-fg">{value}</div>
+      <div className="text-[10px] uppercase tracking-wider text-subtle">{label}</div>
     </div>
   );
 }
@@ -98,15 +94,15 @@ function EmptyState({ onExample }: { onExample: (p: string) => void }) {
   return (
     <div className="grid min-h-0 flex-1 place-items-center px-6 py-10">
       <div className="max-w-lg text-center">
-        <div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-violet-500/20 to-cyan-400/20 text-violet-200 ring-1 ring-white/10">
+        <div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-accent-dim text-accent ring-1 ring-line-2">
           <SparkIcon className="h-7 w-7" />
         </div>
-        <h2 className="text-2xl font-semibold tracking-tight text-zinc-50">
+        <h2 className="text-2xl font-semibold tracking-tight text-fg">
           Generate original music from a prompt
         </h2>
-        <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-zinc-400">
-          Describe a vibe and REZN composes a batch of original candidates. Listen, approve the
-          ones you like, request variants, and pick a final track.
+        <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">
+          Describe a vibe and REZN composes a batch of original candidates. Listen, approve the ones
+          you like, request variants, and pick a final track.
         </p>
 
         <div className="mt-6 flex flex-wrap justify-center gap-2">
@@ -114,7 +110,7 @@ function EmptyState({ onExample }: { onExample: (p: string) => void }) {
             <button
               key={ex}
               onClick={() => onExample(ex)}
-              className="rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs text-zinc-300 transition-colors hover:border-violet-400/40 hover:bg-violet-500/10 hover:text-violet-100"
+              className="rounded-full border border-line-2 bg-surface-2 px-3.5 py-2 text-xs text-muted transition-colors hover:border-accent/40 hover:bg-accent-dim hover:text-accent"
             >
               {ex}
             </button>
@@ -131,19 +127,19 @@ function SkeletonGrid({ count }: { count: number }) {
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
-          className="relative h-[230px] overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.02]"
+          className="relative h-[230px] overflow-hidden rounded-2xl border border-line bg-surface"
         >
           <div
-            className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/[0.06] to-transparent"
+            className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-surface-3 to-transparent"
             style={{ animation: `rezn-shimmer 1.4s ease-in-out ${i * 0.15}s infinite` }}
           />
           <div className="space-y-3 p-4">
-            <div className="h-9 w-2/3 rounded-lg bg-white/[0.05]" />
-            <div className="h-3 w-1/3 rounded bg-white/[0.04]" />
-            <div className="mt-6 h-10 rounded-lg bg-white/[0.04]" />
+            <div className="h-9 w-2/3 rounded-lg bg-surface-2" />
+            <div className="h-3 w-1/3 rounded bg-surface-2" />
+            <div className="mt-6 h-10 rounded-lg bg-surface-2" />
             <div className="grid grid-cols-4 gap-2 pt-3">
               {Array.from({ length: 4 }).map((__, j) => (
-                <div key={j} className="h-9 rounded-xl bg-white/[0.04]" />
+                <div key={j} className="h-9 rounded-xl bg-surface-2" />
               ))}
             </div>
           </div>

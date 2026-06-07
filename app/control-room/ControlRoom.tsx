@@ -264,6 +264,15 @@ export function ControlRoom() {
     say("assistant", "Ready for a new brief. What should we make next?");
   }, [pushEvent, say]);
 
+  // Suggested-action chips: append to the conversation (no full regeneration).
+  const handleSuggestion = useCallback(
+    (text: string) => {
+      say("user", text);
+      say("assistant", "Good call — folding that into the next iteration.");
+    },
+    [say],
+  );
+
   const activeStep = useMemo(() => {
     if (batchStatus === "generating") return 2;
     if (batchStatus === "completed") return 5;
@@ -294,8 +303,8 @@ export function ControlRoom() {
         <ChatPanel
           messages={messages}
           busy={batchStatus === "generating"}
-          showExamples={batchStatus === "idle"}
           onSubmit={handleSubmit}
+          onSuggestion={handleSuggestion}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -317,7 +326,7 @@ export function ControlRoom() {
           />
         </main>
 
-        <aside className="hidden w-[340px] shrink-0 flex-col gap-4 border-l border-white/[0.06] bg-black/20 p-4 lg:flex">
+        <aside className="hidden w-[260px] shrink-0 flex-col gap-4 border-l border-line bg-surface p-4 lg:flex">
           <SystemStatus services={services} />
           <ActivityFeed events={events} />
         </aside>
