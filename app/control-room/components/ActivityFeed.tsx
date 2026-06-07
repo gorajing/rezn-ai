@@ -39,7 +39,11 @@ export function ActivityFeed({ events }: { events: ActivityEvent[] }) {
             </div>
             <div className="-mt-0.5 pb-1">
               <p className="text-sm leading-snug text-zinc-300">{e.message}</p>
-              <time className="text-[11px] tabular-nums text-zinc-600">{clock(e.ts)}</time>
+              {/* Timestamps render at SSR time then update on the client; the formatted
+                  clock legitimately differs, so suppress the hydration warning. */}
+              <time suppressHydrationWarning className="text-[11px] tabular-nums text-zinc-600">
+                {clock(e.ts)}
+              </time>
             </div>
           </li>
         ))}
