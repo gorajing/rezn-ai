@@ -6,7 +6,11 @@ from rezn_ai.storage.redis_store import (
     feedback_key,
     lessons_key,
 )
-from rezn_ai.tracing.weave_client import default_project_name, load_project_env
+from rezn_ai.tracing.weave_client import (
+    _client_matches_project,
+    default_project_name,
+    load_project_env,
+)
 
 
 def test_redis_key_conventions_are_namespaced():
@@ -40,3 +44,14 @@ def test_load_project_env_reads_dotenv_without_overriding_shell_env(tmp_path, mo
     assert default_project_name() == "custom/project"
     assert __import__("os").environ["WANDB_API_KEY"] == "from-shell"
     assert __import__("os").environ["OPENAI_API_KEY"] == "quoted-key"
+
+
+def test_weave_client_project_match_handles_entity_project_normalization():
+    class Client:
+        entity = "rezn-ai"
+        project = "rezn-ai"
+
+    assert _client_matches_project(Client(), "rezn-ai/rezn-ai")
+    assert _client_matches_project(Client(), "rezn-ai")
+    assert not _client_matches_project(Client(), "other/rezn-ai")
+    assert not _client_matches_project(Client(), "rezn-ai/other")

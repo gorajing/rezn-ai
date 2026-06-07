@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 
 try:  # convenience: auto-load .env when run directly without --env-file
     from dotenv import load_dotenv
@@ -31,25 +32,29 @@ from rezn_ai.storage.memory_store import InMemoryStore
 
 
 def main() -> int:
-    # A throwaway store backs the local fallback so the doctor never touches live data.
+    # A throwaway store backs the local fallback. When the real Agent Memory
+    # backend is configured, use an isolated producer/session so diagnostic writes
+    # never contaminate the app's default taste profile.
+    producer_id = f"doctor-{int(time.time())}"
+    session_id = f"batch-{producer_id}"
     try:
         taste = build_taste_memory(InMemoryStore())
     except AgentMemoryUnavailable as exc:
         print(json.dumps({"error": str(exc), "reachable": False}, indent=2))
         return 1
     health = taste.health()
-    report: dict[str, object] = {"health": health}
+    report: dict[str, object] = {"health": health, "producer_id": producer_id}
 
     brief = CreativeBrief(prompt="dark melodic electronic, tense, controlled drums",
                           key="D#", mode="minor", tempo=128.0)
     sample = Candidate(
-        candidate_id="cand_doctor", batch_id="batch_doctor", strategy="groove_architect",
+        candidate_id=f"cand_{producer_id}", batch_id=session_id, strategy="groove_architect",
         seed=77, key="D#", mode="minor", tempo=128.0, status="approved", technical_score=0.72,
     )
     try:
-        taste.remember_curation(producer_id="default", session_id="batch_doctor",
+        taste.remember_curation(producer_id=producer_id, session_id=session_id,
                                 action="approved", candidate=sample)
-        recall = taste.recall_taste(producer_id="default", brief=brief, limit=5)
+        recall = taste.recall_taste(producer_id=producer_id, brief=brief, limit=5)
         report["recalled_facts"] = len(recall.facts)
         report["bias"] = {
             "strategy_boosts": recall.bias.strategy_boosts,

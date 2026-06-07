@@ -50,7 +50,33 @@ def default_project_name() -> str:
     return os.getenv("WEAVE_PROJECT", DEFAULT_WEAVE_PROJECT)
 
 
+def _project_parts(project: str) -> tuple[str | None, str]:
+    """Return ``(entity, project_name)`` for a W&B project string."""
+    if "/" not in project:
+        return None, project
+    entity, name = project.split("/", 1)
+    return entity or None, name
+
+
+def _client_matches_project(client: Any, project: str) -> bool:
+    """True when a normalized Weave client already targets ``project``.
+
+    Weave normalizes ``entity/project`` into separate ``client.entity`` and
+    ``client.project`` fields. Calling ``weave.init("entity/project")`` again
+    compares the raw string against ``client.project`` internally and can flush
+    the current client unnecessarily, so the app does that comparison itself.
+    """
+    entity, name = _project_parts(project)
+    if getattr(client, "project", None) != name:
+        return False
+    if entity is not None and getattr(client, "entity", None) != entity:
+        return False
+    return True
+
+
 def initialize_weave(project: str | None = None) -> WeaveStatus:
+    global _WEAVE_CLIENT
+
     load_project_env()
     project_name = project or default_project_name()
     try:
@@ -61,10 +87,18 @@ def initialize_weave(project: str | None = None) -> WeaveStatus:
     if not os.getenv("WANDB_API_KEY"):
         return WeaveStatus(project_name, available=True, initialized=False, reason="missing_wandb_api_key")
 
+    try:
+        current = weave.get_client()
+        if current is not None and _client_matches_project(current, project_name):
+            _WEAVE_CLIENT = current
+            return WeaveStatus(project_name, available=True, initialized=True, reason="ok")
+    except Exception:
+        pass
+
     # A bad/expired key or an unreachable W&B must not take down API startup:
     # degrade to untraced rather than raising out of module import.
     try:
-        weave.init(project_name)
+        _WEAVE_CLIENT = weave.init(project_name)
     except Exception as exc:  # noqa: BLE001 - report any init failure, keep serving
         return WeaveStatus(project_name, available=True, initialized=False, reason=f"init_failed:{type(exc).__name__}")
     return WeaveStatus(project_name, available=True, initialized=True, reason="ok")
@@ -137,7 +171,14 @@ def _weave_client() -> Any:
     if _WEAVE_CLIENT is None:
         import weave  # type: ignore
 
-        _WEAVE_CLIENT = weave.init(default_project_name())
+        project_name = default_project_name()
+        current = weave.get_client()
+        if current is not None and _client_matches_project(current, project_name):
+            _WEAVE_CLIENT = current
+        else:
+            if not os.getenv("WANDB_API_KEY"):
+                raise RuntimeError("WANDB_API_KEY is required for Weave feedback")
+            _WEAVE_CLIENT = weave.init(project_name)
     return _WEAVE_CLIENT
 
 
