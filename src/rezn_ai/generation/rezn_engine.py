@@ -197,6 +197,7 @@ class ReznGeneratorEngine:
         sound_profile_snapshot = {
             "profile_id": profile_id,
             "parent_profile_id": parent_profile_id,
+            "policy_version": 0,  # set by the contrastive policy update (Workstream E)
             "style": arrangement.get("identity", {}).get("strategy"),
             "genre": arrangement.get("identity", {}).get("genre"),
             "voices": voices,

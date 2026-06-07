@@ -51,6 +51,7 @@ def test_generated_candidate_carries_profile_provenance(tmp_path):
     assert "kick.drive" in top.profile_features  # learnable drum features captured
     assert top.drum_kit.get("name")  # a resolved (non-empty) kit
     assert top.sound_profile.get("profile_id") == top.profile_id
+    assert "policy_version" in top.sound_profile  # snapshot contract matches to_snapshot()
     assert top.sound_profile.get("features", {}).get("kick.drive") == top.profile_features["kick.drive"]
 
 

@@ -51,3 +51,10 @@ def test_bare_minimal_desire_decreases_density():
     """A bare 'more minimal' desire (no 'too') still means sparser."""
     n = nudges_from_guidance(["keep it minimal and stripped back"])
     assert n.energy_delta < 0
+
+
+def test_too_much_space_is_not_a_sparser_nudge():
+    """'too much space/silence' must not be misread as a 'too busy' complaint —
+    bare 'much' is ambiguous and was wrongly mapped to a sparser nudge."""
+    assert nudges_from_guidance(["there is too much space here"]).energy_delta >= 0
+    assert nudges_from_guidance(["too much silence"]).energy_delta >= 0

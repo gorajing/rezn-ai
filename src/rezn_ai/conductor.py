@@ -329,6 +329,10 @@ class BatchConductor:
             raise ValueError(
                 f"candidate {candidate_id} belongs to batch {candidate.batch_id}, not {batch_id}"
             )
+        # Fully idempotent: a retry of select_final on the already-final pick is a
+        # strict no-op — no duplicate event, Weave reaction, or lesson rewrite.
+        if candidate.status == "final" and batch.selected_final_id == candidate_id:
+            return batch
         already_counted = candidate.status in ("approved", "final")
         candidate.status = "final"
         self.store.save_candidate(candidate)

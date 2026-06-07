@@ -47,7 +47,9 @@ _TOO_SPARSE = re.compile(
     re.IGNORECASE,
 )
 _TOO_BUSY = re.compile(
-    r"\btoo\s+(busy|dense|cluttered|crowded|much|heavy|loud|full|thick|noisy|"
+    # NB: bare 'much' is intentionally excluded — "too much space/silence" is a
+    # request for LESS space (denser), not a too-busy complaint.
+    r"\btoo\s+(busy|dense|cluttered|crowded|heavy|loud|full|thick|noisy|"
     r"busy on drums)\b",
     re.IGNORECASE,
 )

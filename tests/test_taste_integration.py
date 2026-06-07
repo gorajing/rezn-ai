@@ -135,6 +135,18 @@ def test_approve_then_final_records_one_curation_per_candidate(tmp_path):
     assert len(for_cand) == 1
 
 
+def test_select_final_is_fully_idempotent(tmp_path):
+    """A retry of select_final on the already-final pick must not re-append the
+    batch.final_selected event nor re-record (Codex round-4 finding)."""
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cid = batch.candidates[0].candidate_id
+    cond.select_final(batch.batch_id, cid)
+    cond.select_final(batch.batch_id, cid)  # retry
+    events = [e.type for e in cond.store.get_batch(batch.batch_id).events]
+    assert events.count("batch.final_selected") == 1
+
+
 def test_select_final_rejects_a_cross_batch_candidate(tmp_path):
     """select_final must refuse a candidate that does not belong to the batch —
     otherwise it finalizes a foreign candidate and points selected_final_id outside
