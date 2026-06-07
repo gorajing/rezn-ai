@@ -49,7 +49,8 @@ def _build_store() -> tuple[object, str]:
     if redis_url and not is_truthy(os.getenv("REZN_DISABLE_REDIS")):
         try:
             store = RedisStore(redis_url=redis_url)
-            store.ping()
+            if not store.ping():  # ping() returns False on unreachable, not just raising
+                raise RuntimeError("ping failed")
             return store, f"redis ({redis_url.split('@')[-1]})"
         except Exception as exc:  # pragma: no cover - falls back if Redis is down
             print(f"# Redis unavailable ({exc}); using InMemoryStore", file=sys.stderr)

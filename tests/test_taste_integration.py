@@ -290,6 +290,26 @@ def test_evolved_prompt_arm_avoids_rejected_trait_in_next_batch(tmp_path):
     )
 
 
+def test_refine_prompt_arm_mutation_is_idempotent(tmp_path):
+    """Retrying refine_batch on the same parent must not re-apply the prompt-arm
+    reward/mutation (no A1 -> A2, no double reward, evolved arm not gated out)."""
+    from rezn_ai.music.prompt_policy import select_prompt_policy
+
+    cond = _conductor(tmp_path)
+    b1 = cond.start_batch(BatchCreateRequest(brief=_brief(4)))
+    groove = next(c for c in b1.candidates if c.strategy == "groove_architect")
+    cond.reject_candidate(groove.candidate_id, note="too hypnotic, lost me")
+    cond.refine_batch(b1.batch_id)
+    arm1 = cond.store.get_profile(cond.producer_id, "arm:groove_architect")
+    arms1 = cond.store.get_prompt_arms(cond.producer_id)
+    cond.refine_batch(b1.batch_id)  # retry of the same parent
+    arm2 = cond.store.get_profile(cond.producer_id, "arm:groove_architect")
+    arms2 = cond.store.get_prompt_arms(cond.producer_id)
+    assert arm1 == arm2  # not re-mutated
+    assert arms1 == arms2  # reward not double-applied
+    assert "hypnotic" in select_prompt_policy(cond.store, cond.producer_id, "groove_architect").avoid
+
+
 def test_policy_version_reflects_curation(tmp_path):
     """Candidates carry the Redis policy version (curation events): 0 before any
     curation, >0 after (Codex finding — was hardcoded to 0)."""

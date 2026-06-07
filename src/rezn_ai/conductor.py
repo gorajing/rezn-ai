@@ -635,7 +635,19 @@ class BatchConductor:
         # persist + surface the rezn-ai.taste-update.v1 object so the next batch's
         # changes are explainable.
         feature_deltas = self._update_policy(parent_batch_id) or {}
-        prompt_deltas = self._mutate_prompt_arms(parent)
+        # Prompt-arm evolution (reward + A->A1) is accumulative, so apply it at most
+        # once per parent batch — a retry of refine_batch must not re-reward or push
+        # A1->A2 (which could gate out the just-evolved arm).
+        armmut_key = f"armmut:{parent_batch_id}"
+        if self.store.get_profile(self.producer_id, armmut_key):
+            prompt_deltas: dict[str, str] = {}
+        else:
+            prompt_deltas = self._mutate_prompt_arms(parent)
+            try:
+                self.store.save_profile(self.producer_id, armmut_key, {"applied": True})
+            except Exception:
+                if agent_memory_required():
+                    raise
         decided_count = len(approved) + len(rejected)
         confidence = round(min(1.0, decided_count / max(1, len(parent_candidates))), 4)
         policy_update = build_policy_update(
