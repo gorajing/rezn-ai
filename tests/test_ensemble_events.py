@@ -19,7 +19,14 @@ def test_batch_surfaces_every_ensemble_agent(client):
     assert "orchestrator" in agent_ids
     assert "judge" in agent_ids
     assert {"critic:groove", "critic:harmony", "critic:mix"} <= agent_ids
-    assert sum(1 for a in agent_ids if a.startswith("composer:")) >= 3
+    # count=3 round-robins the first 3 composer strategies deterministically (empty
+    # bias on a fresh batch), so assert the exact set — a dropped or misnamed
+    # composer agent must fail, not slip past a loose count check.
+    assert {a for a in agent_ids if a.startswith("composer:")} == {
+        "composer:groove_architect",
+        "composer:harmony_driver",
+        "composer:texture_builder",
+    }
     assert len(agent_ids) >= 8
 
     # every agent.step event carries a role for the Agent Room to group on
