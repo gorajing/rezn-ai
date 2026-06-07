@@ -119,6 +119,34 @@ def test_lessons_key_is_namespaced():
     assert lessons_key() == "rezn:lessons:global"
 
 
+def test_candidate_roundtrip_persists_profile_provenance(redis_store):
+    """SoundProfile provenance must survive the Redis hash round-trip: profile_id,
+    sound_profile snapshot, internal_prompt, prompt_policy, drum_kit, voices,
+    profile_features, parent_profile_id, and the redis policy version.
+    """
+    cand = _candidate("batch_p", "cand_p", 0.8)
+    cand.profile_id = "prof_abc"
+    cand.parent_profile_id = "prof_parent"
+    cand.policy_version = 3
+    cand.internal_prompt = "punchy 909 groove, tight hats, restrained bass"
+    cand.voices = {"bass": "reese", "lead": "saw"}
+    cand.drum_kit = {"name": "electronic:groove_architect", "kick": {"drive": 0.4}}
+    cand.profile_features = {"kick.drive": 0.42, "hat.brightness": 0.5}
+    cand.prompt_policy = {"arm": "groove_architect:A1", "descriptors": ["punchy"], "avoid": ["muddy"]}
+    cand.sound_profile = {"profile_id": "prof_abc", "style": "groove_architect"}
+    redis_store.save_candidate(cand)
+    got = redis_store.get_candidate("cand_p")
+    assert got.profile_id == "prof_abc"
+    assert got.parent_profile_id == "prof_parent"
+    assert got.policy_version == 3
+    assert got.internal_prompt == "punchy 909 groove, tight hats, restrained bass"
+    assert got.voices == {"bass": "reese", "lead": "saw"}
+    assert got.drum_kit == {"name": "electronic:groove_architect", "kick": {"drive": 0.4}}
+    assert got.profile_features == {"kick.drive": 0.42, "hat.brightness": 0.5}
+    assert got.prompt_policy["arm"] == "groove_architect:A1"
+    assert got.sound_profile["profile_id"] == "prof_abc"
+
+
 def test_remember_upserts_by_dedup_key(redis_store):
     """A keyed lesson collapses to one sorted-set member; the latest write wins.
 

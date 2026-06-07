@@ -64,6 +64,22 @@ class Candidate(BaseModel):
     # The Weave call that generated this candidate's batch, so human curation can
     # attach reactions/notes back onto the exact trace.
     weave_call_id: str | None = None
+    # ── SoundProfile provenance (the self-improving loop's learnable spine) ──────
+    # profile_id identifies the resolved SoundProfile; sound_profile is its JSON
+    # snapshot. internal_prompt is the per-candidate prompt generated from the
+    # profile/PromptPolicy (NOT the UI starter prompt). prompt_policy/drum_kit/
+    # voices/profile_features are the resolved policy + sound params the loop learns
+    # over. parent_profile_id + policy_version trace lineage and which Redis policy
+    # version produced this candidate.
+    profile_id: str | None = None
+    sound_profile: dict[str, Any] = Field(default_factory=dict)
+    internal_prompt: str | None = None
+    prompt_policy: dict[str, Any] = Field(default_factory=dict)
+    drum_kit: dict[str, Any] = Field(default_factory=dict)
+    voices: dict[str, str] = Field(default_factory=dict)
+    profile_features: dict[str, float] = Field(default_factory=dict)
+    parent_profile_id: str | None = None
+    policy_version: int = 0
     created_at: str = Field(default_factory=utc_now)
 
 

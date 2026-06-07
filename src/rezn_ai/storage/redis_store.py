@@ -120,8 +120,14 @@ def encode_json(payload: Any) -> str:
 
 # ── Candidate <-> Redis hash serialization ─────────────────────────────────────
 
-_OPTIONAL_STR_FIELDS = ("audio_url", "arrangement_url", "trace_url", "parent_candidate_id", "feedback", "weave_call_id")
-_JSON_FIELDS = ("scores", "midi_urls", "reasons")
+_OPTIONAL_STR_FIELDS = (
+    "audio_url", "arrangement_url", "trace_url", "parent_candidate_id", "feedback",
+    "weave_call_id", "profile_id", "internal_prompt", "parent_profile_id",
+)
+_JSON_FIELDS = (
+    "scores", "midi_urls", "reasons",
+    "sound_profile", "prompt_policy", "drum_kit", "voices", "profile_features",
+)
 
 
 def _candidate_to_mapping(c: Candidate) -> dict[str, str]:
@@ -135,11 +141,11 @@ def _candidate_to_mapping(c: Candidate) -> dict[str, str]:
         "tempo": str(c.tempo),
         "status": c.status,
         "technical_score": str(c.technical_score),
+        "policy_version": str(c.policy_version),
         "created_at": c.created_at,
-        "scores": json.dumps(c.scores),
-        "midi_urls": json.dumps(c.midi_urls),
-        "reasons": json.dumps(c.reasons),
     }
+    for field in _JSON_FIELDS:
+        mapping[field] = json.dumps(getattr(c, field))
     for field in _OPTIONAL_STR_FIELDS:
         mapping[field] = getattr(c, field) or ""
     return mapping
@@ -156,6 +162,7 @@ def _candidate_from_mapping(m: dict[str, str]) -> Candidate:
         "tempo": float(m["tempo"]),
         "status": m["status"],
         "technical_score": float(m["technical_score"]),
+        "policy_version": int(m.get("policy_version") or 0),
         "created_at": m["created_at"],
     }
     for field in _JSON_FIELDS:
