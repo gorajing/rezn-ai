@@ -343,7 +343,7 @@ class JudgeDecision:
 LENS_FEATURE_GROUPS: dict[str, tuple[str, ...]] = {
     "groove": ("groove_density", "part_balance"),
     "harmony": ("harmonic_variety", "voice_leading", "resolution", "register_range"),
-    "mix": ("audio_health", "dynamic_shape"),
+    "mix": ("dynamic_shape", "audio_health"),
 }
 
 
@@ -365,13 +365,25 @@ def _fallback_lens_verdict(lens: str, candidates: list[CriticInput]) -> LensVerd
     return LensVerdict(lens, ranking, fav.candidate_id if fav else "", rationale, "fallback")
 
 
+def _dedupe_ranking(raw_ranking, fallback_ranking: tuple[str, ...]) -> tuple[str, ...]:
+    """Coerce a model ranking into the contract: each valid candidate exactly once,
+    best->worst. Drops unknown/duplicate ids; appends any the model omitted so no
+    candidate is lost."""
+    valid = set(fallback_ranking)
+    ranking: list[str] = []
+    for c in raw_ranking or []:
+        cid = str(c)
+        if cid in valid and cid not in ranking:
+            ranking.append(cid)
+    for cid in fallback_ranking:
+        if cid not in ranking:
+            ranking.append(cid)
+    return tuple(ranking)
+
+
 def _coerce_lens_verdict(lens: str, raw: dict, fallback: LensVerdict) -> LensVerdict:
-    valid = set(fallback.ranking)
-    ranking = tuple(str(c) for c in raw.get("ranking", []) if str(c) in valid)
-    ranking += tuple(cid for cid in fallback.ranking if cid not in ranking)  # never drop a candidate
-    favorite = str(raw.get("favorite", ""))
-    if favorite not in valid:
-        favorite = ranking[0] if ranking else ""
+    ranking = _dedupe_ranking(raw.get("ranking", []), fallback.ranking)
+    favorite = ranking[0] if ranking else ""  # the favorite is the top of the ranking
     rationale = str(raw.get("rationale", ""))[:240] or fallback.rationale
     return LensVerdict(lens, ranking, favorite, rationale, "wandb_inference")
 
@@ -437,12 +449,8 @@ def _fallback_judge(candidates: list[CriticInput]) -> JudgeDecision:
 
 
 def _coerce_judge(raw: dict, fallback: JudgeDecision) -> JudgeDecision:
-    valid = set(fallback.ranking)
-    ranking = tuple(str(c) for c in raw.get("ranking", []) if str(c) in valid)
-    ranking += tuple(cid for cid in fallback.ranking if cid not in ranking)
-    winner = str(raw.get("winner", ""))
-    if winner not in valid:
-        winner = ranking[0] if ranking else ""
+    ranking = _dedupe_ranking(raw.get("ranking", []), fallback.ranking)
+    winner = ranking[0] if ranking else ""  # the winner is the top of the ranking
     rationale = str(raw.get("rationale", ""))[:240] or fallback.rationale
     confidence = _clamp(float(raw.get("confidence", 0.5)))
     return JudgeDecision(ranking, winner, rationale, round(confidence, 4), "wandb_inference")

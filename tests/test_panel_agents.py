@@ -101,3 +101,26 @@ def test_coerce_appends_dropped_candidates(monkeypatch):
     v = lens_critique("groove", _inputs())
     assert set(v.ranking) == {"a", "b"}
     assert len(v.ranking) == 2
+
+
+def test_lens_coerce_dedupes_and_aligns_favorite(monkeypatch):
+    # Model returns a duplicate in ranking AND a favorite that isn't ranking[0].
+    monkeypatch.setattr("rezn_ai.config.deep_mode_enabled", lambda: True)
+    monkeypatch.setattr(
+        "rezn_ai.agents.llm_agents._inference_client",
+        _client_returning('{"ranking": ["a", "a", "b"], "favorite": "b", "rationale": "x"}'),
+    )
+    v = lens_critique("groove", _inputs())
+    assert v.ranking == ("a", "b")        # deduped — each candidate exactly once
+    assert v.favorite == v.ranking[0]     # favorite aligned to the top of the ranking
+
+
+def test_judge_coerce_dedupes_and_aligns_winner(monkeypatch):
+    monkeypatch.setattr("rezn_ai.config.deep_mode_enabled", lambda: True)
+    monkeypatch.setattr(
+        "rezn_ai.agents.llm_agents._inference_client",
+        _client_returning('{"ranking": ["b", "b", "a"], "winner": "a", "rationale": "x", "confidence": 0.9}'),
+    )
+    d = judge_panel(_inputs(), [])
+    assert d.ranking == ("b", "a")
+    assert d.winner == d.ranking[0]
