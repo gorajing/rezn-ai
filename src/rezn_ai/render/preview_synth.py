@@ -116,18 +116,25 @@ def render_arrangement(
     *,
     sample_rate: int = SAMPLE_RATE,
     max_seconds: float | None = None,
+    start_seconds: float = 0.0,
 ) -> tuple[array, array, int]:
     """Render an arrangement to (left, right, sample_rate) float buffers in [-1, 1].
 
-    ``max_seconds`` caps the render length (used by the API for short, snappy
-    previews); ``None`` renders the full arrangement.
+    ``max_seconds`` caps the render length and ``start_seconds`` offsets where the
+    window begins (used by the API to preview the full-band section rather than the
+    quiet intro). ``None`` + 0.0 renders the whole arrangement.
     """
     tempo = float(arrangement["identity"]["tempo"])
     seconds_per_beat = 60.0 / tempo
     total_beats = float(arrangement["form"]["total_beats"])
-    total_samples = int(math.ceil((total_beats * seconds_per_beat + TAIL_SECONDS) * sample_rate))
+    full_samples = int(math.ceil((total_beats * seconds_per_beat + TAIL_SECONDS) * sample_rate))
+    window_start = max(0, int(start_seconds * sample_rate))
     if max_seconds is not None:
-        total_samples = min(total_samples, max(1, int(max_seconds * sample_rate)))
+        total_samples = min(full_samples, window_start + max(1, int(max_seconds * sample_rate)))
+    else:
+        total_samples = full_samples
+    if window_start >= total_samples:
+        window_start = 0  # window past the content — fall back to the start
 
     left = array("d", bytes(8 * total_samples))
     right = array("d", bytes(8 * total_samples))
@@ -163,7 +170,7 @@ def render_arrangement(
                 left[i] += value * lgain
                 right[i] += value * rgain
 
-    return left, right, sample_rate
+    return left[window_start:], right[window_start:], sample_rate
 
 
 def _normalize_to_int16(left: array, right: array) -> bytes:
@@ -189,8 +196,11 @@ def write_preview_wav(
     *,
     sample_rate: int = SAMPLE_RATE,
     max_seconds: float | None = None,
+    start_seconds: float = 0.0,
 ) -> Path:
-    left, right, rate = render_arrangement(arrangement, sample_rate=sample_rate, max_seconds=max_seconds)
+    left, right, rate = render_arrangement(
+        arrangement, sample_rate=sample_rate, max_seconds=max_seconds, start_seconds=start_seconds
+    )
     pcm = _normalize_to_int16(left, right)
     path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(path), "wb") as wav:
@@ -203,3 +213,18 @@ def write_preview_wav(
 
 def preview_path_for_candidate(candidate_dir: Path) -> Path:
     return candidate_dir / "renders" / "preview.wav"
+
+
+def full_band_start_seconds(arrangement: dict[str, Any]) -> float:
+    """Start time (s) of the first section with both bass and drums active.
+
+    Previewing from here (the full-band part) rather than the quiet intro makes
+    the per-strategy differences — drum pattern, bass, density — actually audible
+    in a short clip. Returns 0.0 if no section has the full band.
+    """
+    tempo = float(arrangement["identity"]["tempo"])
+    seconds_per_beat = 60.0 / tempo
+    for section in arrangement.get("form", {}).get("sections", []):
+        if {"bass", "drums"} <= set(section.get("active_parts", [])):
+            return float(section.get("start_beat", 0.0)) * seconds_per_beat
+    return 0.0

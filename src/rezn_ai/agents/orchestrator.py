@@ -87,6 +87,7 @@ def compose_candidate(plan: CandidatePlan) -> dict[str, Any]:
         mode=plan.mode,
         tempo=plan.tempo,
         seed=plan.seed,
+        strategy=plan.strategy,
     )
 
 

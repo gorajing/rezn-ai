@@ -27,7 +27,7 @@ from ..models import CreativeBrief, new_id
 from ..music.composition import compose_arrangement
 from ..music.midi import export_midi_parts
 from ..provenance import write_json
-from ..render.preview_synth import write_preview_wav
+from ..render.preview_synth import full_band_start_seconds, write_preview_wav
 from .engine import CandidateResult
 from .strategies import CandidateParams, plan_candidates, variant_params
 
@@ -101,13 +101,20 @@ class ReznGeneratorEngine:
             mode=mode,
             tempo=tempo,
             seed=seed,
+            strategy=params.strategy,
         )
         arrangement_path = candidate_dir / "arrangement.json"
         write_json(arrangement_path, arrangement)
 
+        # Preview the full-band section (not the quiet intro) so the strategy's
+        # drums/bass/density are audible in a short clip.
         audio_path = candidate_dir / "renders" / "preview.wav"
         write_preview_wav(
-            arrangement, audio_path, sample_rate=self.sample_rate, max_seconds=self.preview_seconds
+            arrangement,
+            audio_path,
+            sample_rate=self.sample_rate,
+            max_seconds=self.preview_seconds,
+            start_seconds=full_band_start_seconds(arrangement),
         )
 
         midi_paths = export_midi_parts(arrangement, candidate_dir / "midi")
