@@ -107,6 +107,14 @@ export function CandidateCard({
             {STRATEGY_BLURB[candidate.strategy] && (
               <p className="mt-0.5 text-[11px] text-muted">{STRATEGY_BLURB[candidate.strategy]}</p>
             )}
+            {candidate.internalPrompt && (
+              <p
+                className="mt-0.5 truncate text-[11px] italic text-subtle"
+                title={candidate.internalPrompt}
+              >
+                ↳ {candidate.internalPrompt}
+              </p>
+            )}
           </div>
         </div>
 

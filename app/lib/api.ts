@@ -69,6 +69,9 @@ export interface ApiCandidate {
   arrangement_url: string | null;
   trace_url: string | null;
   parent_candidate_id: string | null;
+  // SoundProfile provenance: the INTERNAL prompt (not the UI starter) + profile id.
+  internal_prompt: string | null;
+  profile_id: string | null;
 }
 
 const FALLBACK_FEATURE_META: Record<string, { label: string; weight: number }> = {
@@ -166,6 +169,8 @@ export function toUiCandidate(c: ApiCandidate, rank: number): Candidate {
     audioUrl: artifactUrl(c.audio_url),
     traceUrl: c.trace_url ?? undefined,
     scoreDetail: toScoreDetail(c.scores, Number(c.technical_score ?? 0)),
+    internalPrompt: c.internal_prompt ?? undefined,
+    profileId: c.profile_id ?? undefined,
   };
 }
 

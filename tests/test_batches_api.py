@@ -78,6 +78,22 @@ def test_get_candidate(client) -> None:
     assert "technical_score" in candidate
 
 
+def test_api_exposes_internal_prompt_and_profile_metadata(client) -> None:
+    """The API surfaces each candidate's INTERNAL prompt + SoundProfile provenance,
+    distinct from the UI starter brief."""
+    batch = _start(client)
+    cand = batch["candidates"][0]
+    assert cand["internal_prompt"]  # the generated internal prompt (not the brief)
+    assert cand["internal_prompt"] != _brief()["prompt"]
+    assert cand["profile_id"]
+    assert "kick.drive" in cand["profile_features"]
+    assert cand["drum_kit"].get("name")
+    assert cand["prompt_policy"].get("arm")
+    assert cand["sound_profile"].get("profile_id") == cand["profile_id"]
+    # Per-candidate Weave trace link is present.
+    assert cand["trace_url"]
+
+
 def test_get_candidate_not_found(client) -> None:
     assert client.get("/api/candidates/cand_missing").status_code == 404
 

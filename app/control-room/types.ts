@@ -54,6 +54,8 @@ export interface Candidate {
   audioUrl?: string; // live preview WAV served from the API /artifacts mount
   traceUrl?: string; // W&B Weave trace link
   scoreDetail?: ScoreDetail; // real breakdown of how the score was computed
+  internalPrompt?: string; // the generated INTERNAL prompt (not the UI starter brief)
+  profileId?: string; // the resolved SoundProfile id (content-addressed)
 }
 
 export type EventLevel = "info" | "agent" | "score" | "success" | "warn";
