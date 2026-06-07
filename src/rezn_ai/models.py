@@ -97,6 +97,11 @@ class MemoryLesson(BaseModel):
     tags: list[str] = Field(default_factory=list)
     strategy: str | None = None
     improvement_delta: float = 0.0
+    # Optional idempotency key: lessons sharing a dedup_key collapse to a single
+    # stored record (the latest write supersedes prior ones). Curation lessons use
+    # "curation:{candidate_id}" so approve -> select_final updates one decision
+    # record instead of double-counting the candidate as two taste wins.
+    dedup_key: str | None = None
     created_at: str = Field(default_factory=utc_now)
 
 

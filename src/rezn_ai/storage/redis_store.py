@@ -104,6 +104,15 @@ def lessons_key() -> str:
     return "rezn:lessons:global"
 
 
+def lessons_dedup_key() -> str:
+    """Hash mapping a lesson dedup_key -> its current sorted-set member JSON.
+
+    Lets ``remember`` find and remove the prior member when a keyed lesson is
+    superseded, so the sorted set holds one record per dedup_key.
+    """
+    return "rezn:lessons:dedup"
+
+
 def encode_json(payload: Any) -> str:
     value = asdict(payload) if is_dataclass(payload) else payload
     return json.dumps(value, sort_keys=True)
@@ -244,7 +253,14 @@ class RedisStore:
 
     def remember(self, lesson: MemoryLesson, improvement_delta: float = 0.0) -> MemoryLesson:
         lesson.improvement_delta = improvement_delta
-        self._r.zadd(lessons_key(), {lesson.model_dump_json(): improvement_delta})
+        member = lesson.model_dump_json()
+        if lesson.dedup_key is not None:
+            # Supersede any prior member with the same key (single decision record).
+            prior = self._r.hget(lessons_dedup_key(), lesson.dedup_key)
+            if prior:
+                self._r.zrem(lessons_key(), prior)
+            self._r.hset(lessons_dedup_key(), lesson.dedup_key, member)
+        self._r.zadd(lessons_key(), {member: improvement_delta})
         return lesson
 
     def recall_top_lessons(self, limit: int = 5) -> list[MemoryLesson]:

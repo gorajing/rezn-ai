@@ -514,6 +514,14 @@ class BatchConductor:
             body = f"{candidate.strategy} was rejected at score {candidate.technical_score}." + (
                 f" Note: {note}" if note else "")
         self.store.remember(
-            MemoryLesson(body=body, strategy=candidate.strategy, tags=[candidate.strategy, candidate.mode]),
+            MemoryLesson(
+                body=body,
+                strategy=candidate.strategy,
+                tags=[candidate.strategy, candidate.mode],
+                # One decision record per candidate: approve -> select_final updates
+                # the same record (final supersedes the approval) rather than adding
+                # a second taste win. Idempotent across re-approve / approve->final.
+                dedup_key=f"curation:{candidate.candidate_id}",
+            ),
             improvement_delta=delta,
         )

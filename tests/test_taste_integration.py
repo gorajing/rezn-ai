@@ -50,6 +50,36 @@ def test_curation_records_taste_event(tmp_path):
     assert "taste.remembered" in events
 
 
+def test_approve_then_final_records_a_single_superseding_lesson(tmp_path):
+    """approve -> select_final on ONE candidate must leave a single win record.
+
+    The final selection supersedes/updates the approval record rather than adding
+    a second positive lesson, so the producer is never double-counted as two
+    taste wins (Phase-0 blocker #4).
+    """
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cand = batch.candidates[0]
+    cond.approve_candidate(cand.candidate_id)
+    cond.select_final(batch.batch_id, cand.candidate_id)
+    wins = [lsn for lsn in cond.store.list_memories() if lsn.improvement_delta > 0]
+    assert len(wins) == 1  # one record, not two
+    # The surviving record is the FINAL (superseded the approval), not dropped.
+    assert wins[0].improvement_delta == cand.technical_score + 0.5
+    assert "final" in wins[0].body.lower()
+
+
+def test_reapprove_does_not_double_count(tmp_path):
+    """Re-approving the same candidate must not add a second taste win."""
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cand = batch.candidates[0]
+    cond.approve_candidate(cand.candidate_id)
+    cond.approve_candidate(cand.candidate_id)
+    wins = [lsn for lsn in cond.store.list_memories() if lsn.improvement_delta > 0]
+    assert len(wins) == 1
+
+
 def test_approve_is_safe_without_weave(tmp_path):
     # Weave tracing is off in tests; feedback must degrade silently, not crash.
     cond = _conductor(tmp_path)

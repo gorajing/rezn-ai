@@ -119,6 +119,27 @@ def test_lessons_key_is_namespaced():
     assert lessons_key() == "rezn:lessons:global"
 
 
+def test_remember_upserts_by_dedup_key(redis_store):
+    """A keyed lesson collapses to one sorted-set member; the latest write wins.
+
+    Parity with InMemoryStore: approve -> select_final on one candidate must leave
+    a single decision record (the final supersedes the approval), not two.
+    """
+    from rezn_ai.models import MemoryLesson
+
+    redis_store.remember(
+        MemoryLesson(body="approved", dedup_key="curation:cand_1"), improvement_delta=0.7
+    )
+    redis_store.remember(
+        MemoryLesson(body="selected as final", dedup_key="curation:cand_1"), improvement_delta=1.2
+    )
+    lessons = redis_store.list_memories()
+    keyed = [lsn for lsn in lessons if lsn.dedup_key == "curation:cand_1"]
+    assert len(keyed) == 1
+    assert keyed[0].body == "selected as final"
+    assert keyed[0].improvement_delta == 1.2
+
+
 def test_candidate_roundtrip_preserves_weave_call_id(redis_store):
     """Per-candidate Weave deep-links must survive the Redis hash round-trip.
 

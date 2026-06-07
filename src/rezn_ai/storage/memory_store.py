@@ -67,6 +67,11 @@ class InMemoryStore:
     def remember(self, lesson: MemoryLesson, improvement_delta: float = 0.0) -> MemoryLesson:
         stored = lesson.model_copy(deep=True)
         stored.improvement_delta = improvement_delta
+        if stored.dedup_key is not None:
+            # Supersede any prior record with the same key (single decision record).
+            self._lessons = [
+                (d, lsn) for (d, lsn) in self._lessons if lsn.dedup_key != stored.dedup_key
+            ]
         self._lessons.append((improvement_delta, stored))
         return stored
 
