@@ -63,6 +63,9 @@ class PlanningBias:
     # The current prompt arm per strategy (strategy -> PromptPolicy.to_dict()), used
     # to build each candidate's INTERNAL prompt. Empty -> strategy defaults.
     prompt_policies: dict[str, dict] = field(default_factory=dict)
+    # The Redis policy version that produced this batch (curation events that have
+    # shaped the taste vector). 0 -> an unbiased, never-curated producer.
+    policy_version: int = 0
 
     @property
     def is_empty(self) -> bool:

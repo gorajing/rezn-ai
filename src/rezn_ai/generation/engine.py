@@ -68,5 +68,11 @@ class GeneratorEngine(Protocol):
         salt: int = 0,
         *,
         guidance: list[str] | None = None,
+        taste: dict[str, float] | None = None,
+        prompt_policy: dict[str, Any] | None = None,
     ) -> CandidateResult:
-        """Generate one reproducible mutation of an existing candidate."""
+        """Generate one reproducible mutation of an existing candidate.
+
+        ``taste`` applies the learned drum-feature vector; ``prompt_policy`` overrides
+        the parent's prompt arm (used by refinement to apply the just-evolved arm).
+        """

@@ -272,6 +272,36 @@ def test_refine_avoids_a_rejected_trait_in_the_prompt_arm(tmp_path):
     assert arm["version"] >= 1
 
 
+def test_evolved_prompt_arm_avoids_rejected_trait_in_next_batch(tmp_path):
+    """After rejecting a trait and refining, the arm the NEXT batch will select for
+    that strategy avoids the disliked trait (allocation-independent)."""
+    from rezn_ai.music.prompt_policy import build_internal_prompt, select_prompt_policy
+
+    cond = _conductor(tmp_path)
+    b1 = cond.start_batch(BatchCreateRequest(brief=_brief(4)))
+    groove = next(c for c in b1.candidates if c.strategy == "groove_architect")
+    assert "hypnotic" in groove.internal_prompt  # base arm includes it
+    cond.reject_candidate(groove.candidate_id, note="too hypnotic, lost me")
+    cond.refine_batch(b1.batch_id)  # evolves the groove arm to avoid 'hypnotic'
+    policy = select_prompt_policy(cond.store, cond.producer_id, "groove_architect")
+    assert "hypnotic" in policy.avoid  # evolved, reward-gated arm survives
+    assert "hypnotic" not in build_internal_prompt(
+        "dark techno", strategy="groove_architect", policy=policy
+    )
+
+
+def test_policy_version_reflects_curation(tmp_path):
+    """Candidates carry the Redis policy version (curation events): 0 before any
+    curation, >0 after (Codex finding — was hardcoded to 0)."""
+    cond = _conductor(tmp_path)
+    b1 = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    assert all(c.policy_version == 0 for c in b1.candidates)
+    cond.approve_candidate(b1.candidates[0].candidate_id)
+    cond.reject_candidate(b1.candidates[1].candidate_id)
+    b2 = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    assert all(c.policy_version > 0 for c in b2.candidates)
+
+
 def test_bare_rejection_leaves_taste_vector_unchanged(tmp_path):
     """A bare rejection (no approved peer, no reason) must not move any feature."""
     cond = _conductor(tmp_path)

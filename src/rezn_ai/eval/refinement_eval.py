@@ -87,6 +87,28 @@ def score_iteration_delta(metrics: IterationMetrics) -> dict[str, Any]:
     return out
 
 
+@weave_op("update_profile_policy")
+def score_policy_update(policy_update: dict[str, Any]) -> dict[str, Any]:
+    """Weave span for the explainable taste/prompt policy update of a refine step.
+
+    Appears in the trace tree under ``refine_batch`` as ``update_profile_policy``,
+    so the rezn-ai.taste-update.v1 object (feature_deltas + prompt_policy_deltas +
+    reason + confidence) is queryable alongside the iteration delta.
+    """
+    return policy_update
+
+
+def log_policy_update(policy_update: dict[str, Any]) -> dict[str, Any] | None:
+    """Trace the policy-update object to Weave (best-effort). Returns it on success.
+
+    Never raises — the learning loop must not depend on Weave connectivity.
+    """
+    try:
+        return score_policy_update(policy_update)
+    except Exception:
+        return None
+
+
 def record_refinement_iteration(
     metrics: IterationMetrics,
     *,

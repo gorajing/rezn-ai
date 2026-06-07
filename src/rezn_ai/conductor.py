@@ -17,7 +17,11 @@ from .agents.llm_agents import interpret_brief, reflect_on_feedback
 from .agents.roster import COMPOSER_STRATEGIES
 from .config import agent_memory_required
 from .eval.preference import composite_score, taste_alignment
-from .eval.refinement_eval import compute_iteration_metrics, record_refinement_iteration
+from .eval.refinement_eval import (
+    compute_iteration_metrics,
+    log_policy_update,
+    record_refinement_iteration,
+)
 from .generation.engine import CandidateResult, GeneratorEngine
 from .learning.policy_update import (
     build_policy_update,
@@ -127,13 +131,24 @@ class BatchConductor:
         except Exception:
             vector = {}
         profile_weights = {k: float(v) for k, v in vector.items() if k != "__count__"}
+        policy_version = int(vector.get("__count__", 0))
         prompt_policies = {
             strategy: select_prompt_policy(self.store, self.producer_id, strategy).to_dict()
             for strategy in COMPOSER_STRATEGIES
         }
         return _dataclass_replace(
-            bias, profile_weights=profile_weights, prompt_policies=prompt_policies
+            bias,
+            profile_weights=profile_weights,
+            prompt_policies=prompt_policies,
+            policy_version=policy_version,
         )
+
+    def _policy_version(self) -> int:
+        """The producer's current Redis policy version (curation events shaping taste)."""
+        try:
+            return int(self.store.get_taste_vector(self.producer_id).get("__count__", 0))
+        except Exception:
+            return 0
 
     def _taste_vector(self) -> dict[str, float]:
         """The producer's persistent taste vector (drum features), without the
@@ -220,17 +235,21 @@ class BatchConductor:
                 base = select_prompt_policy(self.store, self.producer_id, strategy)
                 reject_notes = " ".join(c.feedback or "" for c in rejected).lower()
                 rejected_descriptors = [d for d in base.descriptors if d.lower() in reject_notes]
-                current = base
+                reward = len(approved) - 0.5 * len(rejected)
                 if rejected_descriptors:
-                    current = mutate_prompt_policy(
+                    # Evolve the arm to avoid the disliked traits. The OLD arm earns the
+                    # negative signal; the evolved arm (A1) starts fresh so the reward
+                    # gate in select_prompt_policy gives the improved version a chance.
+                    evolved = mutate_prompt_policy(
                         base, approved_descriptors=(), rejected_descriptors=rejected_descriptors
                     )
-                    self.store.save_profile(self.producer_id, f"arm:{strategy}", current.to_dict())
-                    deltas[strategy] = f"{base.arm} -> {current.arm} (avoid {', '.join(rejected_descriptors)})"
-                reward = len(approved) - 0.5 * len(rejected)
-                if reward:
-                    self.store.update_prompt_arm(self.producer_id, current.arm, reward)
-                    deltas.setdefault(strategy, f"{current.arm} reward {reward:+g}")
+                    self.store.save_profile(self.producer_id, f"arm:{strategy}", evolved.to_dict())
+                    if reward:
+                        self.store.update_prompt_arm(self.producer_id, base.arm, reward)
+                    deltas[strategy] = f"{base.arm} -> {evolved.arm} (avoid {', '.join(rejected_descriptors)})"
+                elif reward:
+                    self.store.update_prompt_arm(self.producer_id, base.arm, reward)
+                    deltas[strategy] = f"{base.arm} reward {reward:+g}"
             except Exception:
                 continue
         return deltas
@@ -449,7 +468,7 @@ class BatchConductor:
         salt = len(batch.candidates)
         result = self.engine.generate_variant(
             batch.brief, parent.batch_id, self.artifacts_root, parent, salt,
-            taste=self._taste_vector(),
+            taste=self._taste_vector(), policy_version=self._policy_version(),
         )
         child = self._to_candidate(result, parent.batch_id, parent_id=parent.candidate_id)
         self.store.save_candidate(child)
@@ -634,14 +653,28 @@ class BatchConductor:
         except Exception:
             if agent_memory_required():
                 raise
-        self._event(child_id, "taste.updated", policy_update["reason"], policy_update)
+        # Weave proof: trace the policy update under refine_batch (best-effort).
+        weave_policy = log_policy_update(policy_update)
+        self._event(
+            child_id, "taste.updated", policy_update["reason"],
+            {**policy_update, "weave_logged": weave_policy is not None},
+        )
 
         taste_vector = self._taste_vector()
+        policy_version = self._policy_version()
+        # Round N+1 uses the JUST-EVOLVED prompt arm per strategy (mutated above),
+        # not the parent's stale arm.
+        evolved_policies = {
+            strategy: select_prompt_policy(self.store, self.producer_id, strategy).to_dict()
+            for strategy in set(allocation)
+        }
         for slot, strategy in enumerate(allocation):
             parent_cand = self._best_parent(parent_candidates, strategy, recall.bias.strategy_boosts)
             result = self.engine.generate_variant(
                 parent.brief, child_id, self.artifacts_root, parent_cand, salt=slot,
                 guidance=guidance, taste=taste_vector,
+                prompt_policy=evolved_policies.get(strategy),
+                policy_version=policy_version,
             )
             child = self._to_candidate(result, child_id, parent_id=parent_cand.candidate_id)
             self._stamp_preference(child, recall.bias.strategy_boosts)

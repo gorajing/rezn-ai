@@ -122,6 +122,25 @@ def current_call_id() -> str | None:
         return None
 
 
+_WEAVE_CLIENT: Any = None
+
+
+def _weave_client() -> Any:
+    """The process-wide Weave client, initialized once and cached.
+
+    ``add_call_feedback`` previously called ``weave.init`` on every curation action,
+    re-handshaking with W&B each time and making real-Weave runs (e.g. the proof
+    script) impractically slow. Caching the client keeps feedback to a single
+    network round-trip per call.
+    """
+    global _WEAVE_CLIENT
+    if _WEAVE_CLIENT is None:
+        import weave  # type: ignore
+
+        _WEAVE_CLIENT = weave.init(default_project_name())
+    return _WEAVE_CLIENT
+
+
 def add_call_feedback(
     call_id: str | None, *, reaction: str | None = None, note: str | None = None
 ) -> bool:
@@ -133,9 +152,7 @@ def add_call_feedback(
     if not call_id or (reaction is None and note is None):
         return False
     try:
-        import weave  # type: ignore
-
-        client = weave.init(default_project_name())
+        client = _weave_client()
         call = client.get_call(call_id)
         if reaction:
             call.feedback.add_reaction(reaction)

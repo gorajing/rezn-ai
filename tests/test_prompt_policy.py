@@ -50,6 +50,16 @@ def test_default_prompt_policy_is_the_base_arm():
     assert p.version == 0
 
 
+def test_no_descriptor_is_a_genre_keyword():
+    """Descriptors must be character words only — never genre keywords — or appending
+    them to the internal prompt would silently flip detect_genre (Codex finding)."""
+    from rezn_ai.music.composition import detect_genre
+
+    for strategy, descriptors in STRATEGY_DESCRIPTORS.items():
+        for d in descriptors:
+            assert detect_genre(d) is None, f"{strategy} descriptor '{d}' triggers a genre"
+
+
 def test_select_prompt_policy_defaults_then_reads_learned_arm():
     store = InMemoryStore()
     # No history -> the base arm.
@@ -62,3 +72,14 @@ def test_select_prompt_policy_defaults_then_reads_learned_arm():
     p1 = select_prompt_policy(store, "default", "groove_architect")
     assert p1.arm == "groove_architect:A1"
     assert "gritty" in p1.descriptors
+
+
+def test_select_prompt_policy_abandons_a_net_disliked_arm():
+    """A learned arm with negative accumulated reward is reward-gated out, reverting
+    to the base arm (the bandit selects by reward)."""
+    store = InMemoryStore()
+    learned = PromptPolicy(arm="groove_architect:A1", descriptors=("gritty",), avoid=(), version=1)
+    store.save_profile("default", "arm:groove_architect", learned.to_dict())
+    store.update_prompt_arm("default", "groove_architect:A1", -2.0)
+    p = select_prompt_policy(store, "default", "groove_architect")
+    assert p.arm == "groove_architect:A"  # reverted to the base arm

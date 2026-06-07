@@ -59,11 +59,13 @@ class ReznGeneratorEngine:
         guidance = list(bias.suggestions) if bias is not None else None
         policies = bias.prompt_policies if bias is not None else {}
         taste = bias.profile_weights if bias is not None else None
+        policy_version = bias.policy_version if bias is not None else 0
         results = [
             self._render(
                 batch_id, artifacts_root, params, brief, guidance,
                 prompt_policy=policies.get(params.strategy),
                 taste=taste,
+                policy_version=policy_version,
             )
             for params in plan
         ]
@@ -81,6 +83,8 @@ class ReznGeneratorEngine:
         *,
         guidance: list[str] | None = None,
         taste: dict[str, float] | None = None,
+        prompt_policy: dict[str, Any] | None = None,
+        policy_version: int = 0,
     ) -> CandidateResult:
         parent_params = CandidateParams(
             parent.strategy, parent.seed, parent.key, parent.mode, parent.tempo
@@ -97,8 +101,9 @@ class ReznGeneratorEngine:
                 parent_features = {str(k): float(v) for k, v in raw.items()}
 
         parent_profile_id = getattr(parent, "profile_id", None) or None
-        # Continue the parent's prompt arm so a variant stays on the same prompt line.
-        parent_policy = getattr(parent, "prompt_policy", None) or None
+        # Refinement passes the just-evolved arm; otherwise continue the parent's arm
+        # so a plain variant stays on the same prompt line.
+        parent_policy = prompt_policy or getattr(parent, "prompt_policy", None) or None
         nudges = nudges_from_guidance(guidance, parent_features=parent_features)
         # When the reflector emitted change directives, micro-search a few seeds and
         # keep the highest-scoring variant — bounded hill-climb within the session.
@@ -122,6 +127,7 @@ class ReznGeneratorEngine:
                     parent_profile_id=parent_profile_id,
                     prompt_policy=parent_policy,
                     taste=taste,
+                    policy_version=policy_version,
                 )
                 if best is None or result.technical_score > best.technical_score:
                     best = result
@@ -139,6 +145,7 @@ class ReznGeneratorEngine:
             parent_profile_id=parent_profile_id,
             prompt_policy=parent_policy,
             taste=taste,
+            policy_version=policy_version,
         )
 
     @weave_op("compose_candidate")
@@ -155,6 +162,7 @@ class ReznGeneratorEngine:
         parent_profile_id: str | None = None,
         prompt_policy: dict[str, Any] | None = None,
         taste: dict[str, float] | None = None,
+        policy_version: int = 0,
     ) -> CandidateResult:
         candidate_id = new_id("cand")
         candidate_dir = Path(artifacts_root) / "batches" / batch_id / candidate_id
@@ -224,7 +232,7 @@ class ReznGeneratorEngine:
         sound_profile_snapshot = {
             "profile_id": profile_id,
             "parent_profile_id": parent_profile_id,
-            "policy_version": 0,  # set by the contrastive policy update (Workstream E)
+            "policy_version": policy_version,
             "style": arrangement.get("identity", {}).get("strategy"),
             "genre": arrangement.get("identity", {}).get("genre"),
             "voices": voices,
@@ -302,4 +310,5 @@ class ReznGeneratorEngine:
             voices=voices,
             profile_features=profile_features,
             parent_profile_id=parent_profile_id,
+            policy_version=policy_version,
         )

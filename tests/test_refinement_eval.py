@@ -49,3 +49,12 @@ def test_score_iteration_delta_op():
     assert out["passed"] is True
     assert out["reward"] == 0.10
     assert out["delta_top"] == 0.10
+
+
+def test_log_policy_update_traces_and_returns_object():
+    """The policy-update Weave span returns the object (hermetic no-op pass-through)."""
+    from rezn_ai.eval.refinement_eval import log_policy_update
+
+    obj = {"schema": "rezn-ai.taste-update.v1", "batch_id": "b2", "reason": "Adjusted kick.drive +0.06."}
+    out = log_policy_update(obj)
+    assert out == obj

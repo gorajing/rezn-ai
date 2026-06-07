@@ -23,7 +23,7 @@ from .sound_profile import PromptPolicy
 STRATEGY_DESCRIPTORS: dict[str, tuple[str, ...]] = {
     "groove_architect": ("driving", "hypnotic", "punchy drums", "tight low end"),
     "harmony_driver": ("emotional chords", "tense", "rich harmony", "expressive"),
-    "texture_builder": ("atmospheric", "spacious", "evolving pads", "restrained"),
+    "texture_builder": ("ethereal", "spacious", "evolving pads", "restrained"),
     "energy_curve": ("building", "dynamic", "bright", "energetic"),
     "wildcard_mutator": ("experimental", "unexpected", "off-kilter", "bold"),
 }
@@ -66,8 +66,13 @@ def select_prompt_policy(store: Any, producer_id: str, strategy: str) -> PromptP
     """
     try:
         stored = store.get_profile(producer_id, f"arm:{strategy}")
+        arms = store.get_prompt_arms(producer_id)
     except Exception:
-        stored = None
+        stored, arms = None, {}
     if stored:
-        return PromptPolicy.from_dict(stored)
+        policy = PromptPolicy.from_dict(stored)
+        # Reward-gated selection: abandon a net-disliked arm (negative accumulated
+        # reward) and fall back to the base arm.
+        if arms.get(policy.arm, 0.0) >= 0.0:
+            return policy
     return default_prompt_policy(strategy)
