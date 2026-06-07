@@ -364,21 +364,49 @@ git commit -m "feat(conductor): emit per-agent events + per-agent Weave sessions
 
 **Files:** none (verification only — confirms the Agents view shows the ensemble).
 
-- [ ] **Step 1: Run a real batch with Weave on**
+> ⚠️ **The `rezn-ai batch` CLI does NOT exercise this change.** `cli.py` calls
+> `agents.orchestrator.orchestrate_batch` (the older harness-only path), not
+> `BatchConductor`. The per-agent ensemble (orchestrator/critics/judge + per-agent
+> Weave sessions) lives in `BatchConductor.start_batch`, which is driven by the **API**
+> (`POST /api/batches`). Verify via the conductor/API path, not the CLI.
 
-Run (requires `WANDB_API_KEY` in `.env`):
+- [x] **Step 1: Run a real batch through the conductor with Weave on** *(done 2026-06-07)*
 
-```bash
-REZN_DISABLE_REDIS=true uv run rezn-ai batch --brief "dark melodic techno" --count 4 --seed 7 --root /tmp/rezn-ensemble
+Requires `WANDB_API_KEY` in `.env`. Either start the API (`uv run uvicorn rezn_ai.api.main:app`)
+and `POST /api/batches {"brief":{"prompt":"dark melodic techno","candidate_count":4}}`, or run the
+conductor inline (mirrors the API setup; drops only the production taste-memory guard, Weave stays live):
+
+```python
+import os, tempfile, pathlib
+from rezn_ai.tracing.weave_client import initialize_weave
+initialize_weave()
+os.environ.pop("AGENT_MEMORY_REQUIRED", None); os.environ.pop("REZN_PRODUCTION", None)
+from rezn_ai.conductor import BatchConductor
+from rezn_ai.generation.rezn_engine import ReznGeneratorEngine
+from rezn_ai.storage.memory_store import InMemoryStore
+from rezn_ai.models import BatchCreateRequest, CreativeBrief
+cond = BatchConductor(store=InMemoryStore(), engine=ReznGeneratorEngine(preview_seconds=0.5, sample_rate=16000),
+                      artifacts_root=pathlib.Path(tempfile.mkdtemp()))
+batch = cond.start_batch(BatchCreateRequest(brief=CreativeBrief(prompt="dark melodic techno", candidate_count=4)))
 ```
 
-Expected: prints a Weave call link. Open the project's **Agents** view at the printed workspace URL.
+**Verified result:** one batch surfaced **9 distinct agents** in `batch.events` (4 composers +
+3 critics + judge + orchestrator), the 3 critics disagreed (groove/harmony → harmony_driver,
+mix → groove_architect), and Weave uploaded real traces (per-candidate `/r/call/…` deep-links +
+the batch trace link). `initialize_weave()` → `initialized=True`, `_agents_weave()` usable
+(weave 0.52.42, `start_session`/`start_turn` present) — so the per-agent `invoke_agent` spans hit
+the real SDK, not the no-op path.
 
-- [ ] **Step 2: Confirm ≥5 distinct agents**
+- [ ] **Step 2: Confirm ≥5 distinct agents in the Weave Agents UI** *(needs human eyes on W&B)*
 
-In the Weave Agents view, confirm `orchestrator`, `critic:groove`, `critic:harmony`, `critic:mix`, and `judge` appear as distinct agents for the batch lineage. (Composers appear in the Traces tab as `compose_candidate` calls — promoting them to Agents-view agents is the Phase-1.5 follow-up noted in the spec.)
+Open the project's **Agents** tab at `https://wandb.ai/rezn-ai/rezn-ai/weave` and confirm
+`orchestrator`, `critic:groove`, `critic:harmony`, `critic:mix`, and `judge` appear as distinct
+agents for the batch lineage. (Composers appear in the Traces tab as `compose_candidate` calls —
+promoting them to Agents-view agents is the Phase-1.5 follow-up noted in the spec, so the in-app
+Agent Room (Task 4) is what shows all 9.)
 
-If they do not appear: the agentic SDK may be unavailable (`_agents_weave()` returns None) — this is best-effort and never fails the batch; the in-app Agent Room (Task 4) is the guaranteed showcase.
+If they do not appear: the agentic SDK may be unavailable (`_agents_weave()` returns None) — this
+is best-effort and never fails the batch; the in-app Agent Room (Task 4) is the guaranteed showcase.
 
 ---
 
