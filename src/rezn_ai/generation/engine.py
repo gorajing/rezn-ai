@@ -33,6 +33,16 @@ class CandidateResult:
     midi_paths: dict[str, str] = field(default_factory=dict)
     params: Any | None = None
     weave_call_id: str | None = None
+    # SoundProfile provenance (captured from the resolved profile at render time).
+    profile_id: str = ""
+    sound_profile: dict[str, Any] = field(default_factory=dict)
+    internal_prompt: str = ""
+    prompt_policy: dict[str, Any] = field(default_factory=dict)
+    drum_kit: dict[str, Any] = field(default_factory=dict)
+    voices: dict[str, str] = field(default_factory=dict)
+    profile_features: dict[str, float] = field(default_factory=dict)
+    parent_profile_id: str | None = None
+    policy_version: int = 0
 
 
 @runtime_checkable

@@ -155,6 +155,16 @@ class BatchConductor:
             trace_url=trace,
             weave_call_id=result.weave_call_id,
             parent_candidate_id=parent_id,
+            # SoundProfile provenance captured at render time.
+            profile_id=result.profile_id,
+            sound_profile=result.sound_profile,
+            internal_prompt=result.internal_prompt,
+            prompt_policy=result.prompt_policy,
+            drum_kit=result.drum_kit,
+            voices=result.voices,
+            profile_features=result.profile_features,
+            parent_profile_id=result.parent_profile_id,
+            policy_version=result.policy_version,
         )
 
     def _event(self, batch_id: str, event_type: str, message: str, payload: dict | None = None) -> None:

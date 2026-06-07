@@ -198,6 +198,11 @@ STRATEGY_KIT_BIAS: dict[str, dict[str, float]] = {
 }
 
 
+def kit_features(kit: DrumKit) -> dict[str, float]:
+    """Public: the learnable controllable features of a kit (dotted keys match FEATURE_SPECS)."""
+    return _kit_features(kit)
+
+
 def _kit_features(kit: DrumKit) -> dict[str, float]:
     return {
         "kick.drive": kit.kick.drive,

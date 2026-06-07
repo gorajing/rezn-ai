@@ -6,6 +6,8 @@ Implements :class:`GeneratorEngine` using ``render.preview_synth`` and
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +22,7 @@ from ..eval.mix_checks import evaluate_metrics
 from ..eval.scoring import technical_score
 from ..models import CreativeBrief, new_id
 from ..music.composition import compose_arrangement
+from ..music.sound_profile import DrumKit, kit_features
 from ..music.midi import export_midi_parts
 from ..provenance import write_json
 from ..render.preview_synth import full_band_start_seconds, write_preview_wav
@@ -82,6 +85,7 @@ class ReznGeneratorEngine:
             if isinstance(raw, dict):
                 parent_features = {str(k): float(v) for k, v in raw.items()}
 
+        parent_profile_id = getattr(parent, "profile_id", None) or None
         nudges = nudges_from_guidance(guidance, parent_features=parent_features)
         # When the reflector emitted change directives, micro-search a few seeds and
         # keep the highest-scoring variant — bounded hill-climb within the session.
@@ -102,6 +106,7 @@ class ReznGeneratorEngine:
                     guidance,
                     parent_features=parent_features,
                     nudges=nudges,
+                    parent_profile_id=parent_profile_id,
                 )
                 if best is None or result.technical_score > best.technical_score:
                     best = result
@@ -116,6 +121,7 @@ class ReznGeneratorEngine:
             guidance,
             parent_features=parent_features,
             nudges=nudges,
+            parent_profile_id=parent_profile_id,
         )
 
     @weave_op("compose_candidate")
@@ -129,6 +135,7 @@ class ReznGeneratorEngine:
         *,
         parent_features: dict[str, float] | None = None,
         nudges: Any | None = None,
+        parent_profile_id: str | None = None,
     ) -> CandidateResult:
         candidate_id = new_id("cand")
         candidate_dir = Path(artifacts_root) / "batches" / batch_id / candidate_id
@@ -165,6 +172,41 @@ class ReznGeneratorEngine:
         )
         arrangement_path = candidate_dir / "arrangement.json"
         write_json(arrangement_path, arrangement)
+
+        # Capture the resolved SoundProfile from the arrangement (the source of
+        # truth for what was rendered): pitched voices + the drum kit, plus the
+        # learnable drum features. drum_kit is omitted from the arrangement JSON
+        # when it equals the kernel (byte-identity), so default to the kernel here.
+        voices = dict(arrangement.get("voices") or {})
+        kit_data = arrangement.get("drum_kit")
+        kit = DrumKit.from_dict(kit_data) if kit_data else DrumKit.kernel()
+        profile_features = kit_features(kit)
+        # Content-addressed profile id: deterministic + lets identical resolved
+        # profiles dedup/reuse in the Redis profiles store. Excludes the id itself.
+        _content = json.dumps(
+            {
+                "style": arrangement.get("identity", {}).get("strategy"),
+                "genre": arrangement.get("identity", {}).get("genre"),
+                "voices": voices,
+                "drum_kit": kit.to_dict(),
+                "features": profile_features,
+            },
+            sort_keys=True,
+        )
+        profile_id = "prof_" + hashlib.sha256(_content.encode("utf-8")).hexdigest()[:12]
+        sound_profile_snapshot = {
+            "profile_id": profile_id,
+            "parent_profile_id": parent_profile_id,
+            "style": arrangement.get("identity", {}).get("strategy"),
+            "genre": arrangement.get("identity", {}).get("genre"),
+            "voices": voices,
+            "drum_kit": kit.to_dict(),
+            "features": profile_features,
+            # internal_prompt / prompt_policy are populated by the prompt-policy
+            # bandit in a later workstream; empty here keeps the snapshot honest.
+            "internal_prompt": "",
+            "prompt_policy": None,
+        }
 
         # Preview the full-band section (not the quiet intro) so the strategy's
         # drums/bass/density are audible in a short clip.
@@ -226,4 +268,10 @@ class ReznGeneratorEngine:
             midi_paths=midi_paths,
             params=params,
             weave_call_id=current_call_id(),
+            profile_id=profile_id,
+            sound_profile=sound_profile_snapshot,
+            drum_kit=kit.to_dict(),
+            voices=voices,
+            profile_features=profile_features,
+            parent_profile_id=parent_profile_id,
         )

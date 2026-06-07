@@ -39,6 +39,21 @@ def test_rezn_engine_batch_ranked_with_our_scorer(tmp_path):
     assert len(previews) >= 3
 
 
+def test_generated_candidate_carries_profile_provenance(tmp_path):
+    """Real generated candidates must capture the resolved SoundProfile, not persist
+    empty defaults: profile_id, voices, drum_kit, profile_features, sound_profile."""
+    conductor = _conductor(tmp_path)
+    brief = CreativeBrief(prompt="dark melodic techno", key="D#", mode="minor", tempo=128.0, candidate_count=3)
+    batch = conductor.start_batch(BatchCreateRequest(brief=brief))
+    top = batch.candidates[0]
+    assert top.profile_id
+    assert top.voices  # pitched voice map captured
+    assert "kick.drive" in top.profile_features  # learnable drum features captured
+    assert top.drum_kit.get("name")  # a resolved (non-empty) kit
+    assert top.sound_profile.get("profile_id") == top.profile_id
+    assert top.sound_profile.get("features", {}).get("kick.drive") == top.profile_features["kick.drive"]
+
+
 def test_rezn_engine_variant_has_lineage(tmp_path):
     conductor = _conductor(tmp_path)
     brief = CreativeBrief(prompt="x", key="A", mode="minor", tempo=120.0, candidate_count=2)
@@ -58,3 +73,7 @@ def test_rezn_engine_is_deterministic(tmp_path):
     sig_a = sorted((c.strategy, c.seed, c.technical_score) for c in a.candidates)
     sig_b = sorted((c.strategy, c.seed, c.technical_score) for c in b.candidates)
     assert sig_a == sig_b
+    # profile_id is content-addressed, so identical profiles share the same id.
+    pid_a = sorted((c.strategy, c.profile_id) for c in a.candidates)
+    pid_b = sorted((c.strategy, c.profile_id) for c in b.candidates)
+    assert pid_a == pid_b
