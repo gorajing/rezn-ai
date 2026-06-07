@@ -31,6 +31,8 @@ def test_score_in_unit_range_and_complete():
     assert 0.0 <= result["technical_score"] <= 1.0
     assert result["completeness"] == 1.0
     assert result["validity_gate"] == 1.0
+    assert {"groove_density", "part_balance", "dynamic_shape", "audio_health"} <= set(result["features"])
+    assert "feature_weights" in result and "score_summary" in result
 
 
 def test_scorer_discriminates_between_progressions():
@@ -47,3 +49,20 @@ def test_invalid_audio_is_gated_down():
     silent = technical_score(arr, {}, {"checks": {"not_silent": False, "peak_ok": True, "duration_ok": True}})
     assert silent["validity_gate"] == 0.4
     assert silent["technical_score"] < good["technical_score"]
+
+
+def test_rendered_audio_metrics_affect_score():
+    arr = _arrangement([60, 65, 67, 60])
+    weak = technical_score(arr, {"peak": 0.2, "rms": 0.01}, VALID_CHECKS)
+    healthy = technical_score(arr, {"peak": 0.89, "rms": 0.16}, VALID_CHECKS)
+    assert healthy["features"]["audio_health"] > weak["features"]["audio_health"]
+    assert healthy["technical_score"] > weak["technical_score"]
+
+
+def test_part_balance_comes_from_generated_notes():
+    balanced = technical_score(_arrangement([60, 65, 67, 60]), {"peak": 0.89, "rms": 0.16}, VALID_CHECKS)
+    sparse = _arrangement([60, 65, 67, 60])
+    sparse["parts"]["bass"] = []
+    sparse_result = technical_score(sparse, {"peak": 0.89, "rms": 0.16}, VALID_CHECKS)
+    assert balanced["features"]["part_balance"] > sparse_result["features"]["part_balance"]
+    assert balanced["technical_score"] > sparse_result["technical_score"]

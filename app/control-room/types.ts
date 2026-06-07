@@ -17,6 +17,7 @@ export interface ScoreFeature {
   label: string;
   value: number; // 0..1
   weight: number; // 0..1, contribution to musical_quality
+  description?: string;
 }
 
 // The full score breakdown, mapped from candidate.scores (eval.scoring).
@@ -24,6 +25,7 @@ export interface ScoreDetail {
   technicalScore: number; // final = musicalQuality * validityGate
   musicalQuality: number;
   validityGate: number;
+  summary?: string;
   features: ScoreFeature[];
   // Validity-gate inputs
   completeness: number; // 0..1 (parts present)

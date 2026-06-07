@@ -79,7 +79,7 @@ export function CandidateCard({
       className={[
         "rezn-rise group relative flex flex-col gap-4 rounded-2xl border p-4",
         isFinal
-          ? "border-good/40 bg-good/[0.06] shadow-lg shadow-good/10"
+          ? "border-good/40 bg-good/[0.06]"
           : "border-line bg-surface hover:border-line-2 hover:bg-surface-2",
         isRejected ? "opacity-55" : "",
       ].join(" ")}
@@ -118,14 +118,17 @@ export function CandidateCard({
             onClick={() => hasDetail && setShowScore((s) => !s)}
             disabled={!hasDetail}
             aria-expanded={showScore}
-            title={hasDetail ? "How is this scored?" : undefined}
+            title={hasDetail ? "Show score details" : undefined}
             className={[
-              "rounded-full outline-none transition-transform",
-              hasDetail ? "cursor-pointer hover:scale-105 focus-visible:ring-2 focus-visible:ring-accent/50" : "cursor-default",
-              showScore ? "ring-2 ring-accent/50" : "",
+              "flex flex-col items-center rounded-xl px-1 pb-1 outline-none transition-colors",
+              hasDetail ? "cursor-pointer hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/40" : "cursor-default",
+              showScore ? "bg-surface-2 ring-1 ring-line-2" : "",
             ].join(" ")}
           >
             <ScoreRing score={candidate.score} />
+            <span className="mt-0.5 text-[10px] uppercase tracking-wide text-subtle">
+              {showScore ? "hide" : "details"}
+            </span>
           </button>
         </div>
       </div>
@@ -156,7 +159,7 @@ export function CandidateCard({
         {hasAudio && <audio ref={audioRef} src={candidate.audioUrl} preload="none" />}
         <button
           onClick={onTogglePlay}
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-accent text-bg shadow-lg shadow-accent/20 transition-transform hover:scale-105"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-accent text-bg transition-colors hover:opacity-90"
           aria-label={playing ? "Pause" : "Play"}
         >
           {playing ? <PauseIcon className="h-4 w-4" /> : <PlayIcon className="h-4 w-4 translate-x-[1px]" />}
@@ -172,7 +175,7 @@ export function CandidateCard({
 
       {/* Top reason */}
       <p className="flex items-center gap-1.5 text-xs text-muted">
-        <span className="text-accent">◆</span>
+        <span className="text-accent">•</span>
         {candidate.reasons[0]}
       </p>
 
@@ -230,7 +233,7 @@ function ActionButton({
     <button
       onClick={onClick}
       className={[
-        "flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2 text-xs font-medium transition-colors",
+        "flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium transition-colors",
         active ? ACTIVE_TONES[tone] : `border-line-2 bg-surface-2 text-muted ${TONES[tone]}`,
       ].join(" ")}
     >

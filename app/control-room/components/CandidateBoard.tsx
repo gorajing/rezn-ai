@@ -46,7 +46,7 @@ export function CandidateBoard(props: CandidateBoardProps) {
               <button
                 onClick={props.onRefine}
                 title="Generate the next batch, weighted by your approvals & rejections"
-                className="flex items-center gap-1.5 rounded-xl border border-accent/40 bg-accent-dim px-3 py-2 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
+                className="flex items-center gap-1.5 rounded-lg border border-line-2 bg-surface-2 px-3 py-2 text-xs font-medium text-fg transition-colors hover:border-accent/40 hover:text-accent"
               >
                 <SparkIcon className="h-3.5 w-3.5" />
                 Refine from feedback
@@ -130,8 +130,8 @@ function SkeletonGrid({ count }: { count: number }) {
           className="relative h-[230px] overflow-hidden rounded-2xl border border-line bg-surface"
         >
           <div
-            className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-surface-3 to-transparent"
-            style={{ animation: `rezn-shimmer 1.4s ease-in-out ${i * 0.15}s infinite` }}
+            className="absolute inset-0 bg-surface-2 opacity-50"
+            style={{ animation: `rezn-pulse-border 1.4s ease-in-out ${i * 0.15}s infinite` }}
           />
           <div className="space-y-3 p-4">
             <div className="h-9 w-2/3 rounded-lg bg-surface-2" />

@@ -41,7 +41,15 @@ export interface ApiScores {
     voice_leading?: number;
     resolution?: number;
     register_range?: number;
+    groove_density?: number;
+    part_balance?: number;
+    dynamic_shape?: number;
+    audio_health?: number;
   };
+  feature_weights?: Record<string, number>;
+  feature_labels?: Record<string, string>;
+  feature_descriptions?: Record<string, string>;
+  score_summary?: string;
   audio?: { duration_seconds?: number; peak?: number; rms?: number };
   critic?: { score?: number; reasons?: string[]; source?: string };
   reasons?: string[];
@@ -66,25 +74,34 @@ export interface ApiCandidate {
   parent_candidate_id: string | null;
 }
 
-// Feature weights mirror eval.scoring.technical_score's musical_quality blend.
-const FEATURE_META: { key: keyof NonNullable<ApiScores["features"]>; label: string; weight: number }[] = [
-  { key: "harmonic_variety", label: "Harmonic variety", weight: 0.32 },
-  { key: "voice_leading", label: "Voice leading", weight: 0.28 },
-  { key: "resolution", label: "Tonal resolution", weight: 0.2 },
-  { key: "register_range", label: "Register range", weight: 0.2 },
-];
+const FALLBACK_FEATURE_META: Record<string, { label: string; weight: number }> = {
+  harmonic_variety: { label: "Harmonic variety", weight: 0.18 },
+  voice_leading: { label: "Voice leading", weight: 0.16 },
+  resolution: { label: "Tonal resolution", weight: 0.12 },
+  register_range: { label: "Register range", weight: 0.1 },
+  groove_density: { label: "Groove density", weight: 0.14 },
+  part_balance: { label: "Part balance", weight: 0.14 },
+  dynamic_shape: { label: "Dynamic shape", weight: 0.08 },
+  audio_health: { label: "Audio health", weight: 0.08 },
+};
 
 function toScoreDetail(s: ApiScores | undefined, fallbackScore: number): ScoreDetail {
   const features = (s?.features ?? {}) as Record<string, number | undefined>;
+  const weights = s?.feature_weights ?? {};
+  const labels = s?.feature_labels ?? {};
+  const descriptions = s?.feature_descriptions ?? {};
+  const keys = Object.keys(features).length ? Object.keys(features) : Object.keys(FALLBACK_FEATURE_META);
   return {
     technicalScore: Number(s?.technical_score ?? fallbackScore ?? 0),
     musicalQuality: Number(s?.musical_quality ?? 0),
     validityGate: Number(s?.validity_gate ?? 1),
-    features: FEATURE_META.map((m) => ({
-      key: m.key,
-      label: m.label,
-      value: Number(features[m.key] ?? 0),
-      weight: m.weight,
+    summary: s?.score_summary,
+    features: keys.map((key) => ({
+      key,
+      label: labels[key] ?? FALLBACK_FEATURE_META[key]?.label ?? key.replace(/_/g, " "),
+      value: Number(features[key] ?? 0),
+      weight: Number(weights[key] ?? FALLBACK_FEATURE_META[key]?.weight ?? 0),
+      description: descriptions[key],
     })),
     completeness: Number(s?.completeness ?? 0),
     audioValid: Boolean(s?.audio_valid),

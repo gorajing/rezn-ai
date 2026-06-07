@@ -15,10 +15,9 @@ function pct(v: number): string {
 export function ScoreBreakdown({ detail }: { detail: ScoreDetail }) {
   return (
     <div className="rounded-xl border border-line-2 bg-surface-2 p-3.5 text-left">
-      {/* Final formula */}
       <div className="mb-3 flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-subtle">
-          How this score is computed
+          Score model
         </span>
         <span className="font-mono text-[11px] text-muted">
           quality <span className="text-fg">{detail.musicalQuality.toFixed(2)}</span> × gate{" "}
@@ -26,9 +25,12 @@ export function ScoreBreakdown({ detail }: { detail: ScoreDetail }) {
           <span className="text-accent">{detail.technicalScore.toFixed(2)}</span>
         </span>
       </div>
+      <p className="mb-3 text-[11px] leading-snug text-muted">
+        {detail.summary ??
+          "Score = validity gate × musical quality. Musical quality comes from the generated notes and rendered preview."}
+      </p>
 
-      {/* Weighted musical features */}
-      <p className="mb-1.5 text-[10px] uppercase tracking-wide text-subtle">Musical quality</p>
+      <p className="mb-1.5 text-[10px] uppercase tracking-wide text-subtle">Output-derived musical quality</p>
       <div className="space-y-2">
         {detail.features.map((f) => (
           <div key={f.key}>
@@ -39,6 +41,7 @@ export function ScoreBreakdown({ detail }: { detail: ScoreDetail }) {
               </span>
               <span className="font-mono text-muted">{pct(f.value)}</span>
             </div>
+            {f.description && <p className="mb-1 text-[10px] leading-snug text-subtle">{f.description}</p>}
             <div className="h-1.5 overflow-hidden rounded-full bg-surface-3">
               <div
                 className="h-full rounded-full bg-accent"
@@ -52,6 +55,9 @@ export function ScoreBreakdown({ detail }: { detail: ScoreDetail }) {
       {/* Validity gate */}
       <p className="mb-1.5 mt-3 text-[10px] uppercase tracking-wide text-subtle">
         Validity gate ×{detail.validityGate.toFixed(1)}
+      </p>
+      <p className="mb-2 text-[10px] leading-snug text-subtle">
+        Broken or incomplete previews are gated down before musical quality is applied.
       </p>
       <div className="flex flex-wrap gap-1.5">
         <GateChip ok={detail.completeness >= 1} label={`Parts ${pct(detail.completeness)}%`} />

@@ -24,11 +24,11 @@ const STATUS_META: Record<BatchStatus, { label: string; cls: string; dot: string
 
 function Logo() {
   return (
-    <div className="relative grid h-9 w-9 place-items-center rounded-xl bg-accent shadow-lg shadow-accent/20">
+    <div className="relative grid h-9 w-9 place-items-center rounded-lg border border-line-2 bg-surface-2">
       <div className="flex items-end gap-[2px]">
-        <span className="h-2 w-[2.5px] rounded-full bg-bg/80" />
-        <span className="h-3.5 w-[2.5px] rounded-full bg-bg/80" />
-        <span className="h-2.5 w-[2.5px] rounded-full bg-bg/80" />
+        <span className="h-2 w-[2.5px] rounded-full bg-accent" />
+        <span className="h-3.5 w-[2.5px] rounded-full bg-accent" />
+        <span className="h-2.5 w-[2.5px] rounded-full bg-accent" />
       </div>
     </div>
   );
@@ -44,7 +44,7 @@ type TopBarProps = {
 export function TopBar({ batchStatus, batchId, activeStep, onNewBatch }: TopBarProps) {
   const meta = STATUS_META[batchStatus];
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-line bg-surface/80 px-5 backdrop-blur-xl">
+    <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-line bg-surface px-5">
       <div className="flex items-center gap-3">
         <Logo />
         <div className="leading-tight">

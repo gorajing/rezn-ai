@@ -67,7 +67,7 @@ export function ChatPanel({
           <SparkIcon className="h-4 w-4" />
         </span>
         <div className="leading-tight">
-          <h2 className="text-sm font-semibold text-fg">Copilot</h2>
+          <h2 className="text-sm font-semibold text-fg">Studio</h2>
           <p className="text-[11px] text-subtle">Describe it, curate it, refine it</p>
         </div>
       </div>
@@ -106,8 +106,7 @@ export function ChatPanel({
         <div className="max-h-[150px] space-y-1 overflow-y-auto px-2 py-1">
           {agentActions.length === 0 ? (
             <p className="px-2 py-3 text-[11px] leading-snug text-subtle">
-              CopilotKit actions appear here as you generate and curate. Try asking the copilot to
-              &ldquo;approve the top one.&rdquo;
+              Generation and curation actions appear here as you work through a batch.
             </p>
           ) : (
             agentActions.map((a) => <ActionRow key={a.id} action={a} />)
@@ -115,8 +114,8 @@ export function ChatPanel({
         </div>
       </Section>
 
-      {/* Section B — live copilot context (useCopilotReadable) */}
-      <Section label="Copilot State">
+      {/* Section B — live session context (also exposed to CopilotKit). */}
+      <Section label="Session State">
         <div className="px-2 py-1">
           <div className="overflow-hidden rounded-lg">
             {stateRows(context, hasBatch).map((row, i) => (
@@ -151,7 +150,7 @@ export function ChatPanel({
               key={s.key}
               onClick={() => onSuggestion(s.key)}
               disabled={!hasBatch}
-              className="rounded-[20px] border border-accent/30 bg-accent-dim px-[11px] py-[5px] text-[11px] text-accent transition-colors hover:border-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded-full border border-line-2 bg-surface-2 px-[11px] py-[5px] text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
             >
               {s.label}
             </button>

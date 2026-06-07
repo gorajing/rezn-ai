@@ -1,13 +1,8 @@
 import type { Metadata } from "next";
-import { DM_Sans, DM_Mono } from "next/font/google";
+import { DM_Mono } from "next/font/google";
 import { CopilotKit } from "@copilotkit/react-core";
 import "@copilotkit/react-ui/styles.css";
 import "./globals.css";
-
-const dmSans = DM_Sans({
-  variable: "--font-dm-sans",
-  subsets: ["latin"],
-});
 
 const dmMono = DM_Mono({
   variable: "--font-dm-mono",
@@ -28,7 +23,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full">
       {/* Dark theme is the default on load; ThemeToggle swaps this class. */}
-      <body className={`theme-dark ${dmSans.variable} ${dmMono.variable} antialiased`}>
+      <body className={`theme-dark ${dmMono.variable} antialiased`}>
         <CopilotKit runtimeUrl="/api/copilotkit">{children}</CopilotKit>
       </body>
     </html>
