@@ -11,6 +11,7 @@ PART_CHANNELS = {
     "bass": 1,
     "drums": 9,
     "texture": 2,
+    "lead": 3,
 }
 
 

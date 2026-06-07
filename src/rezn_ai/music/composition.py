@@ -99,6 +99,14 @@ class Style:
     swing: float = 0.0  # 0=straight; ~0.6 delays off-eighths toward a triplet feel
     scale: str | None = None  # override the brief mode, e.g. "dorian", "blues"
     chord_quality: str = "scale"  # "scale"=diatonic stack; else a named chord (dom7, power, …)
+    # Lead/melody line — a monophonic hook sitting above the harmony, the thing that
+    # turns a "bed" into a "song". Off by default (lead_density=0) so the kernel and
+    # the ``default`` strategy stay byte-identical; each real strategy enables it.
+    # Pitch material follows ``scale`` (so it adapts to the genre) and its timing is
+    # swung by ``swing`` like every other part, so no genre-specific lead knobs are needed.
+    lead_density: int = 0  # melodic note slots per bar (0 = no lead at all)
+    lead_octave: int = 5  # register, sits above the harmony
+    lead_gain: float = 1.0
 
 
 DEFAULT_STYLE = Style()
@@ -118,6 +126,9 @@ STYLES: dict[str, Style] = {
         drum_gain=1.1,
         texture_steps=4,
         texture_gain=0.75,
+        lead_density=6,
+        lead_octave=5,
+        lead_gain=0.85,
     ),
     # Lush ninth chords + moving bass, lighter drums — harmony leads.
     "harmony_driver": Style(
@@ -131,6 +142,9 @@ STYLES: dict[str, Style] = {
         drum_gain=0.85,
         texture_octave=5,
         texture_steps=8,
+        lead_density=8,
+        lead_octave=5,
+        lead_gain=1.0,
     ),
     # Dense high arpeggios, sustained pads, minimal drums — atmospheric.
     "texture_builder": Style(
@@ -145,6 +159,9 @@ STYLES: dict[str, Style] = {
         texture_steps=16,
         texture_gain=1.2,
         dynamics=0.7,
+        lead_density=4,
+        lead_octave=6,
+        lead_gain=0.8,
     ),
     # Driving 16th hats + pulsing bass + big dynamic swings.
     "energy_curve": Style(
@@ -155,6 +172,9 @@ STYLES: dict[str, Style] = {
         drum_profile="driving",
         drum_gain=1.15,
         dynamics=1.7,
+        lead_density=8,
+        lead_octave=5,
+        lead_gain=1.05,
     ),
     # Broken beat, wide register, extended chords — left-field.
     "wildcard_mutator": Style(
@@ -169,6 +189,9 @@ STYLES: dict[str, Style] = {
         texture_octave=4,
         texture_steps=12,
         dynamics=1.2,
+        lead_density=6,
+        lead_octave=6,
+        lead_gain=1.0,
     ),
 }
 
@@ -187,11 +210,11 @@ def style_for(strategy: str) -> Style:
 DEFAULT_VOICES: dict[str, str] = {"harmony": "sine", "bass": "sine", "texture": "sine"}
 
 STRATEGY_VOICES: dict[str, dict[str, str]] = {
-    "groove_architect": {"bass": "pluck", "harmony": "square", "texture": "sine"},
-    "harmony_driver": {"harmony": "detuned_saw", "bass": "saw", "texture": "triangle"},
-    "texture_builder": {"texture": "fm_bell", "harmony": "triangle", "bass": "sine"},
-    "energy_curve": {"bass": "saw", "harmony": "square", "texture": "saw"},
-    "wildcard_mutator": {"harmony": "fm_bell", "bass": "square", "texture": "detuned_saw"},
+    "groove_architect": {"bass": "pluck", "harmony": "square", "texture": "sine", "lead": "square"},
+    "harmony_driver": {"harmony": "detuned_saw", "bass": "saw", "texture": "triangle", "lead": "saw"},
+    "texture_builder": {"texture": "fm_bell", "harmony": "triangle", "bass": "sine", "lead": "fm_bell"},
+    "energy_curve": {"bass": "saw", "harmony": "square", "texture": "saw", "lead": "saw"},
+    "wildcard_mutator": {"harmony": "fm_bell", "bass": "square", "texture": "detuned_saw", "lead": "pluck"},
 }
 
 
@@ -350,6 +373,49 @@ def _texture_notes(key: str, scale: str, degree: int, start: float, energy: floa
     ]
 
 
+def _lead_notes(
+    key: str, scale: str, degree: int, start: float, energy: float, style: Style, em: float, bar_seed: int
+) -> list[Note]:
+    """A monophonic melodic lead over one bar's chord.
+
+    The hook that makes a candidate read as a *song* rather than a loop: it lands on
+    chord tones on the strong beats and walks the scale (neighbour/passing tones) in
+    between, with rests for phrasing. Pitch material comes from ``scale`` (so it
+    inherits the genre's flavour — dorian, blues, …) and its timing is swung later by
+    :func:`_apply_swing`. Determinism: a private RNG seeded per (composition seed, bar)
+    so existing parts are untouched and the line is reproducible. ``lead_density == 0``
+    (the default/kernel) returns no notes, keeping the default render byte-identical.
+    """
+    if style.lead_density <= 0:
+        return []
+    rng = random.Random(bar_seed)
+    steps = style.lead_density
+    step_dur = 4.0 / steps
+    velocity_base = (58 + energy * 32 * style.dynamics) * style.lead_gain * em
+    chord_tones = (0, 2, 4)  # scale-degree offsets that spell the bar's chord
+    notes: list[Note] = []
+    position = degree + rng.choice(chord_tones)  # start near a chord tone
+    for i in range(steps):
+        on_strong = abs((i * step_dur) % 1.0) < 1e-9  # a downbeat
+        # Leave space — more rests off the beat and at low energy — so the line breathes.
+        rest_chance = 0.18 if on_strong else 0.40 - 0.18 * energy
+        if rng.random() < rest_chance:
+            continue
+        if on_strong:
+            position = degree + rng.choice(chord_tones)  # resolve onto the chord
+        else:
+            position += rng.choice((-2, -1, 1, 2))  # stepwise melodic motion
+        position = max(degree - 3, min(degree + 9, position))  # keep a singable register
+        pitch = max(0, min(127, scale_note(key, scale, position, style.lead_octave)))
+        duration = step_dur * (0.92 if on_strong else 0.6)
+        velocity = _vel(velocity_base if on_strong else velocity_base - 12)
+        notes.append(Note("lead", pitch, start + i * step_dur, duration, velocity))
+    if not notes:  # an active bar should always speak at least once
+        pitch = max(0, min(127, scale_note(key, scale, degree, style.lead_octave)))
+        notes.append(Note("lead", pitch, start, step_dur * 0.92, _vel(velocity_base)))
+    return notes
+
+
 def _apply_swing(notes: list[Note], swing: float) -> list[Note]:
     """Delay off-eighth notes for a swung/shuffle feel.
 
@@ -447,6 +513,12 @@ def compose_arrangement(
                 notes.extend(_bass_notes(key, scale, degree, bar_start, section.energy, style, em))
             if "drums" in section.active_parts:
                 notes.extend(_drum_notes(bar_start, section.energy, local_bar % 8, style, em))
+            # The lead rides the energetic, drum-active sections (ascent/bloom/lift)
+            # and sits out the quiet ones (opening/drift/release), so it enters and
+            # exits like a real arrangement instead of droning throughout.
+            if style.lead_density > 0 and "drums" in section.active_parts:
+                bar_seed = (seed * 2_654_435_761 + bar_cursor * 40_503) & 0x7FFFFFFF
+                notes.extend(_lead_notes(key, scale, degree, bar_start, section.energy, style, em, bar_seed))
             bar_cursor += 1
 
     notes = _apply_swing(notes, style.swing)
