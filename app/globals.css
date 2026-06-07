@@ -218,3 +218,8 @@ body::before {
 .rezn-pulse-border {
   animation: rezn-pulse-border 1.4s ease-in-out infinite;
 }
+
+/* Belt-and-suspenders: hide CopilotKit's floating dev inspector if it mounts anyway. */
+cpk-web-inspector {
+  display: none !important;
+}

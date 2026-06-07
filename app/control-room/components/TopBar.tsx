@@ -45,11 +45,11 @@ export function TopBar({ batchStatus, batchId, activeStep, onNewBatch }: TopBarP
   const meta = STATUS_META[batchStatus];
   return (
     <header className="flex h-[68px] shrink-0 items-center justify-between gap-6 border-b border-line bg-surface px-6">
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-3">
         <Logo />
         <div className="flex items-baseline gap-2.5">
           <span className="display-head text-xl text-fg">REZN</span>
-          <span className="eyebrow text-[9px] text-muted">Control Room</span>
+          <span className="eyebrow whitespace-nowrap text-[9px] text-muted">Control Room</span>
         </div>
       </div>
 
@@ -57,25 +57,27 @@ export function TopBar({ batchStatus, batchId, activeStep, onNewBatch }: TopBarP
         <StepRail active={activeStep} />
       </div>
 
-      <div className="flex items-center gap-2.5">
+      <div className="flex min-w-0 items-center gap-2.5">
         <div
-          className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${meta.cls}`}
+          className={`flex min-w-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${meta.cls}`}
         >
-          <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${meta.dot}`} />
           {batchId ? (
-            <span className="font-mono text-[11px] text-muted">{batchId}</span>
+            <span className="max-w-[120px] truncate font-mono text-[11px] text-muted" title={batchId}>
+              {batchId}
+            </span>
           ) : (
-            <span>No batch</span>
+            <span className="whitespace-nowrap">No batch</span>
           )}
-          <span className="text-subtle">·</span>
-          <span className="tracking-tight">{meta.label}</span>
+          <span className="shrink-0 text-subtle">·</span>
+          <span className="shrink-0 whitespace-nowrap tracking-tight">{meta.label}</span>
         </div>
 
         <ThemeToggle />
 
         <button
           onClick={onNewBatch}
-          className="flex items-center gap-1.5 rounded-full border border-line-2 bg-surface-2 px-3.5 py-1.5 text-xs font-medium text-fg transition-colors hover:border-accent/50 hover:text-accent"
+          className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-line-2 bg-surface-2 px-3.5 py-1.5 text-xs font-medium text-fg transition-colors hover:border-accent/50 hover:text-accent"
         >
           <PlusIcon className="h-3.5 w-3.5" />
           New batch

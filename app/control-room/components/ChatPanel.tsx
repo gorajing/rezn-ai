@@ -59,7 +59,7 @@ export function ChatPanel({ messages, busy, agentActions, onSubmit }: ChatPanelP
           <div key={m.id} className={`rezn-rise flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
             <div
               className={[
-                "max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
+                "max-w-[85%] overflow-hidden rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words [overflow-wrap:anywhere]",
                 m.role === "user"
                   ? "rounded-br-md bg-accent text-bg"
                   : "rounded-bl-md border border-line bg-surface-2 text-fg",
@@ -171,7 +171,7 @@ function ActionRow({ action }: { action: AgentAction }) {
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className={`font-mono text-[12px] ${running ? "text-accent" : error ? "text-bad" : "text-muted"}`}>
+          <span className={`min-w-0 truncate font-mono text-[12px] ${running ? "text-accent" : error ? "text-bad" : "text-muted"}`}>
             {action.name}
           </span>
           <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-subtle">

@@ -50,7 +50,8 @@ export function CandidateCard({
   onTrace,
   onSelectFinal,
 }: CandidateCardProps) {
-  const [progress, setProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const [waveLevels, setWaveLevels] = useState<number[]>(() => Array(WAVEFORM_BARS).fill(0));
   const [showScore, setShowScore] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -63,6 +64,24 @@ export function CandidateCard({
   const isFinal = candidate.status === "final";
   const isRejected = candidate.status === "rejected";
 
+  // Prefer the real <audio> duration; fall back to the backend-reported length
+  // (and a 12s floor) until metadata loads, so the timeline is never zero-width.
+  const effectiveDuration = duration > 0 ? duration : candidate.durationSec || 12;
+  const clampedTime = Math.min(currentTime, effectiveDuration);
+  const progress = effectiveDuration > 0 ? Math.min(1, clampedTime / effectiveDuration) : 0;
+
+  // Seek to a 0..1 fraction of the track (waveform click / keyboard).
+  const seekToFraction = (fraction: number) => {
+    const frac = Math.max(0, Math.min(1, fraction));
+    const el = audioRef.current;
+    if (hasAudio && el && Number.isFinite(el.duration) && el.duration > 0) {
+      el.currentTime = frac * el.duration;
+      setCurrentTime(el.currentTime);
+    } else {
+      setCurrentTime(frac * effectiveDuration);
+    }
+  };
+
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
@@ -70,11 +89,35 @@ export function CandidateCard({
     else el.pause();
   }, [playing]);
 
+  // Keep duration + currentTime synced to the real element on every relevant
+  // event so the timeline and labels track the song even while paused or seeking.
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el || !hasAudio) return;
+    const syncTime = () => setCurrentTime(el.currentTime);
+    const syncMeta = () => {
+      if (Number.isFinite(el.duration) && el.duration > 0) setDuration(el.duration);
+    };
+    el.addEventListener("loadedmetadata", syncMeta);
+    el.addEventListener("durationchange", syncMeta);
+    el.addEventListener("timeupdate", syncTime);
+    el.addEventListener("seeked", syncTime);
+    syncMeta();
+    return () => {
+      el.removeEventListener("loadedmetadata", syncMeta);
+      el.removeEventListener("durationchange", syncMeta);
+      el.removeEventListener("timeupdate", syncTime);
+      el.removeEventListener("seeked", syncTime);
+    };
+  }, [hasAudio, candidate.audioUrl]);
+
+  // No-audio preview: simulate playback against the reported duration.
   useEffect(() => {
     if (hasAudio) return;
     if (!playing) return;
+    const total = candidate.durationSec || 12;
     const id = setInterval(() => {
-      setProgress((p) => Math.min(1, p + 0.25 / candidate.durationSec));
+      setCurrentTime((t) => (t >= total ? 0 : Math.min(total, t + 0.25)));
     }, 250);
     return () => clearInterval(id);
   }, [hasAudio, playing, candidate.durationSec]);
@@ -138,7 +181,7 @@ export function CandidateCard({
       }
 
       levelsRef.current = next;
-      setProgress(el.duration ? Math.min(1, el.currentTime / el.duration) : 0);
+      setCurrentTime(el.currentTime);
       if (now - lastCommit > 32) {
         setWaveLevels(next);
         lastCommit = now;
@@ -176,14 +219,16 @@ export function CandidateCard({
     >
       {/* Header: rank + identity + score */}
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
+        <div className="flex min-w-0 items-start gap-3">
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-line-2 bg-surface-3 font-mono text-sm font-medium text-fg">
             {candidate.rank || "•"}
           </div>
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="display-head truncate text-[15px] text-fg">{candidate.label}</h3>
-              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${pill.cls}`}>
+            <div className="flex min-w-0 items-center gap-2">
+              <h3 className="display-head min-w-0 truncate text-[15px] text-fg">{candidate.label}</h3>
+              <span
+                className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-medium ${pill.cls}`}
+              >
                 {pill.label}
               </span>
             </div>
@@ -201,7 +246,7 @@ export function CandidateCard({
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <button
             onClick={onSelectFinal}
             title="Select as final"
@@ -260,9 +305,14 @@ export function CandidateCard({
           <audio
             ref={audioRef}
             src={candidate.audioUrl}
-            preload="none"
+            preload="metadata"
             crossOrigin="anonymous"
-            onEnded={() => playing && onTogglePlay()}
+            onEnded={() => {
+              const el = audioRef.current;
+              if (el) el.currentTime = 0;
+              setCurrentTime(0);
+              if (playing) onTogglePlay();
+            }}
           />
         )}
         <button
@@ -279,10 +329,11 @@ export function CandidateCard({
             playing={playing}
             levels={waveLevels}
             bars={WAVEFORM_BARS}
+            onSeek={seekToFraction}
           />
-          <div className="mt-1 flex justify-between font-mono text-[10px] text-subtle">
-            <span>{fmt(candidate.durationSec * progress)}</span>
-            <span>{fmt(candidate.durationSec)}</span>
+          <div className="mt-1 flex justify-between font-mono text-[10px] tabular-nums text-subtle">
+            <span>{fmt(clampedTime)}</span>
+            <span>{fmt(effectiveDuration)}</span>
           </div>
         </div>
       </div>

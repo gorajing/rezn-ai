@@ -43,7 +43,9 @@ export default function RootLayout({
       <body
         className={`theme-dark ${display.variable} ${body.variable} ${dmMono.variable} antialiased`}
       >
-        <CopilotKit runtimeUrl="/api/copilotkit">{children}</CopilotKit>
+        <CopilotKit runtimeUrl="/api/copilotkit" showDevConsole={false} enableInspector={false}>
+          {children}
+        </CopilotKit>
       </body>
     </html>
   );
