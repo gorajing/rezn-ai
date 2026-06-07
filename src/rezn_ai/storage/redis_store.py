@@ -21,7 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import redis as redis_lib
 
-from ..models import Batch, BatchEvent, Candidate, MemoryLesson
+from ..models import MAX_LESSONS, Batch, BatchEvent, Candidate, MemoryLesson
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +129,17 @@ def taste_profile_key(producer_id: str, profile_id: str) -> str:
 
 def taste_decisions_key(producer_id: str) -> str:
     return f"rezn:taste:{producer_id}:decisions"
+
+
+# Ephemeral per-run state safe to purge between demos. Learned state — the
+# rezn:lessons:* and rezn:taste:* families — is deliberately NOT listed here.
+_EPHEMERAL_PREFIXES = (
+    "rezn:batches:",     # batch JSON
+    "rezn:batch:",       # per-batch candidates ZSET + events stream
+    "rezn:candidates:",  # candidate hashes
+    "rezn:feedback:",    # curation feedback
+    "rezn:refine:",      # once-per-parent armmut markers
+)
 
 
 def encode_json(payload: Any) -> str:
@@ -281,6 +292,7 @@ class RedisStore:
         member = lesson.model_dump_json()
         if lesson.dedup_key is None:
             self._r.zadd(lessons_key(), {member: improvement_delta})
+            self._cap_lessons()
             return lesson
 
         # Supersede any prior member with the same key — atomically, so concurrent
@@ -296,7 +308,34 @@ class RedisStore:
             pipe.zadd(lessons_key(), {member: improvement_delta})
 
         self._r.transaction(_txn, lessons_dedup_key())
+        self._cap_lessons()
         return lesson
+
+    def _cap_lessons(self) -> None:
+        """Trim the lessons sorted set to the top ``MAX_LESSONS`` by improvement_delta,
+        dropping the weakest-signal lessons so the set cannot grow without bound across
+        demo runs. Recall reads only the top few, so the cap never starves recall.
+
+        The dedup hash (``lessons_dedup_key``) is pruned in lockstep: a keyed lesson
+        writes a parallel hash field, so capping only the sorted set would leave that
+        hash growing forever. Evicted members' dedup fields are HDEL'd — but only when
+        the hash still points at the evicted member (a superseding write keeps its own
+        field).
+        """
+        key = lessons_key()
+        excess = int(self._r.zcard(key)) - MAX_LESSONS
+        if excess <= 0:
+            return
+        doomed = self._r.zrange(key, 0, excess - 1)  # the lowest-scored members
+        self._r.zremrangebyrank(key, 0, excess - 1)
+        dedup = lessons_dedup_key()
+        for member in doomed:
+            try:
+                dedup_key = json.loads(member).get("dedup_key")
+            except (TypeError, ValueError):
+                dedup_key = None
+            if dedup_key and self._r.hget(dedup, dedup_key) == member:
+                self._r.hdel(dedup, dedup_key)
 
     def recall_top_lessons(self, limit: int = 5) -> list[MemoryLesson]:
         entries = self._r.zrevrange(lessons_key(), 0, limit - 1, withscores=True)
@@ -350,11 +389,31 @@ class RedisStore:
         raw = self._r.get(taste_profile_key(producer_id, profile_id))
         return json.loads(raw) if raw else None
 
-    def claim_once(self, key: str) -> bool:
+    def claim_once(self, key: str, ttl_seconds: int | None = None) -> bool:
         """Atomically claim ``key`` exactly once. Returns True for the first caller,
         False thereafter — SET NX is atomic, so concurrent callers cannot both claim.
+
+        ``ttl_seconds`` (SET NX EX) bounds the marker's lifetime so ephemeral
+        idempotency markers self-expire instead of accreting forever; ``None`` keeps
+        the marker until explicitly cleared.
         """
-        return bool(self._r.set(key, "1", nx=True))
+        return bool(self._r.set(key, "1", nx=True, ex=ttl_seconds))
+
+    def purge_demo_state(self, *, execute: bool = False) -> dict[str, int]:
+        """SCAN and (when ``execute``) UNLINK ephemeral demo run-state, always
+        preserving learned state (rezn:lessons:*, rezn:taste:*). Strictly scoped to
+        ``_EPHEMERAL_PREFIXES`` — never FLUSHDB. Dry-run by default; returns a
+        ``{"ephemeral": found, "deleted": removed}`` report.
+        """
+        keys: set[str] = set()
+        for prefix in _EPHEMERAL_PREFIXES:
+            keys.update(self._r.scan_iter(match=f"{prefix}*", count=500))
+        key_list = list(keys)
+        deleted = 0
+        if execute and key_list:
+            for i in range(0, len(key_list), 500):
+                deleted += int(self._r.unlink(*key_list[i : i + 500]))
+        return {"ephemeral": len(key_list), "deleted": deleted}
 
     def append_decision(self, producer_id: str, decision: dict[str, Any]) -> None:
         """Append a policy-update / curation decision to the producer's stream."""

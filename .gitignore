@@ -42,3 +42,6 @@ runs/*
 !runs/.gitkeep
 artifacts/runs/
 artifacts/batches/
+
+# Playwright MCP browser-automation logs (not source)
+.playwright-mcp/
