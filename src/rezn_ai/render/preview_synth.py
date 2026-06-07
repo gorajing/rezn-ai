@@ -15,6 +15,8 @@ from array import array
 from pathlib import Path
 from typing import Any
 
+from ..music.sound_profile import DrumKit
+
 SAMPLE_RATE = 44_100
 CHANNELS = 2
 TARGET_PEAK = 0.89  # leaves headroom so the release "peak_ok" check passes
@@ -181,31 +183,46 @@ def _render_pitched(freq: float, dur_samples: int, sample_rate: int, patch: str)
     return _PATCHES.get(patch, _pitched_tone)(freq, dur_samples, sample_rate)
 
 
-def _drum_hit(pitch: int, dur_samples: int, sample_rate: int, seed: int) -> list[float]:
+def _drum_hit(
+    pitch: int, dur_samples: int, sample_rate: int, seed: int, kit: DrumKit | None = None
+) -> list[float]:
+    """Synthesize one drum hit. ``kit=None`` uses the kernel kit, which reproduces
+    the original fixed synthesis byte-for-byte (drive/brightness bypass at 0.0)."""
+    kit = kit or DrumKit.kernel()
     samples: list[float] = []
     if pitch == KICK:
-        decay = 0.18
+        k = kit.kick
+        drive_g = 1.0 + 4.0 * k.drive
         for i in range(dur_samples):
             t = i / sample_rate
-            freq = 50.0 + 90.0 * math.exp(-32.0 * t)  # pitch drop
-            samples.append(math.sin(2.0 * math.pi * freq * t) * math.exp(-t / decay))
+            freq = k.base_freq + k.drop * math.exp(-k.drop_rate * t)  # pitch drop
+            s = math.sin(2.0 * math.pi * freq * t) * math.exp(-t / k.decay)
+            if k.drive:  # 0.0 -> bypass (byte-identical)
+                s = math.tanh(s * drive_g) / math.tanh(drive_g)
+            samples.append(s)
         return samples
     if pitch == SNARE:
-        decay = 0.14
+        sp = kit.snare
         noise = _noise_sequence(dur_samples, seed)
         for i in range(dur_samples):
             t = i / sample_rate
-            tone = 0.4 * math.sin(2.0 * math.pi * 180.0 * t)
-            samples.append((0.85 * noise[i] + tone) * math.exp(-t / decay))
+            tone = sp.tone_mix * math.sin(2.0 * math.pi * sp.tone_freq * t)
+            samples.append((sp.noise_mix * noise[i] + tone) * math.exp(-t / sp.decay))
         return samples
     if pitch == CLOSED_HAT:
-        decay = 0.035
+        h = kit.hat
         noise = _noise_sequence(dur_samples, seed)
+        prev = 0.0
         for i in range(dur_samples):
             t = i / sample_rate
-            samples.append(noise[i] * math.exp(-t / decay))
+            raw = noise[i]
+            n = raw
+            if h.brightness:  # 0.0 -> bypass (raw noise, byte-identical)
+                n = raw + h.brightness * (raw - prev)  # 1-pole high-pass emphasis
+            prev = raw
+            samples.append(n * math.exp(-t / h.decay))
         return samples
-    # crash / other cymbals
+    # crash / other cymbals — FROZEN in v1
     decay = 0.55
     noise = _noise_sequence(dur_samples, seed)
     for i in range(dur_samples):
@@ -253,6 +270,9 @@ def render_arrangement(
     hit_index = 0
     # part -> synth patch (e.g. {"bass": "pluck"}); absent/unknown falls back to sine.
     voices = arrangement.get("voices") or {}
+    # drum sound: parametric kit written by resolve_profile; absent -> kernel (byte-identical).
+    kit_data = arrangement.get("drum_kit")
+    drum_kit = DrumKit.from_dict(kit_data) if kit_data else DrumKit.kernel()
 
     for part, notes in sorted(arrangement.get("parts", {}).items()):
         gain, pan = PART_MIX.get(part, DEFAULT_MIX)
@@ -267,7 +287,7 @@ def render_arrangement(
             amp = (velocity / 127.0) * gain
 
             if is_drums:
-                voice = _drum_hit(pitch, dur_samples, sample_rate, seed=hit_index)
+                voice = _drum_hit(pitch, dur_samples, sample_rate, seed=hit_index, kit=drum_kit)
                 hit_index += 1
             else:
                 key = (pitch, dur_samples, patch)

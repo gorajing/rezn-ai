@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import random
+import re
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
@@ -19,6 +20,7 @@ from rezn_ai import __version__
 from .arrangement import DEFAULT_FORM, section_start_beats, total_beats
 from .theory import chord_from_root, scale_note
 from .timbre import select_voices
+from .sound_profile import DrumKit, SoundProfile, apply_taste, resolve_kit
 from ..provenance import utc_now
 
 
@@ -244,14 +246,17 @@ _GENRE_KEYWORDS: tuple[tuple[str, str], ...] = (
 def detect_genre(prompt: str | None) -> str | None:
     """Map a free-text brief to a known genre, or None for the native idiom.
 
-    Deterministic substring match, first keyword wins. Unrecognised prompts
-    (incl. techno/electronic) return None, leaving the kernel groove unchanged.
+    Deterministic word-start match (leading word boundary), first keyword wins: a
+    keyword only matches at the start of a word, so "house" no longer matches inside
+    "warehouse", while morphological suffixes still match (e.g. "funky" -> funk).
+    Unrecognised prompts (incl. techno/electronic) return None, leaving the kernel
+    groove unchanged.
     """
     if not prompt:
         return None
     lowered = prompt.lower()
     for keyword, genre in _GENRE_KEYWORDS:
-        if keyword in lowered:
+        if re.search(rf"\b{re.escape(keyword)}", lowered):
             return genre
     return None
 
@@ -366,6 +371,29 @@ def _apply_swing(notes: list[Note], swing: float) -> list[Note]:
     return swung
 
 
+def resolve_profile(
+    *,
+    strategy: str,
+    genre: str | None,
+    energy: float,
+    seed: int,
+    prompt: str = "",
+    taste: dict[str, float] | None = None,
+) -> SoundProfile:
+    """Full sound profile for a candidate: arrangement Style + pitched voices + a
+    parametric DrumKit, optionally nudged toward learned taste. The voice/style logic
+    mirrors the kernel exactly so the default path stays byte-identical."""
+    style = resolve_style(strategy, genre)
+    if prompt and strategy != "default":
+        voices = select_voices(prompt, seed=seed, energy=energy, strategy=strategy)
+    else:
+        voices = voices_for(strategy)
+    kit = resolve_kit(genre=genre, strategy=strategy, energy=energy, seed=seed)
+    if taste:
+        kit = apply_taste(kit, taste)
+    return SoundProfile(arrangement=style, voices=voices, drum_kit=kit)
+
+
 def compose_arrangement(
     *,
     title: str,
@@ -377,11 +405,17 @@ def compose_arrangement(
     energy: float = 0.5,
     prompt: str = "",
     genre: str | None = None,
+    taste: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     # Genre overlay (groove/swing/scale/chord idiom) is detected from the prompt
     # unless passed explicitly; None leaves the native kernel idiom untouched.
     genre = genre or detect_genre(prompt)
-    style = resolve_style(strategy, genre)
+    if genre:
+        genre = genre.lower()  # normalize explicit caller casing so all emitted fields agree
+    profile = resolve_profile(
+        strategy=strategy, genre=genre, energy=energy, seed=seed, prompt=prompt, taste=taste
+    )
+    style = profile.arrangement
     scale = style.scale or mode  # a genre may swap the scale (dorian/blues/…)
     # Global intensity from the interpreted brief: 0.5 is neutral (em == 1.0, so
     # output is unchanged); lower = calmer/softer, higher = punchier.
@@ -418,16 +452,12 @@ def compose_arrangement(
     for note in notes:
         parts.setdefault(note.part, []).append(note.to_dict())
 
-    # Instrumentation follows the prompt (genre/mood/energy), varied per candidate
-    # by seed and keyed to the base strategy (independent of the genre overlay, which
-    # drives groove/scale/chords). The default kernel stays all-sine so the CLI/tests
-    # are byte-identical.
-    if prompt and strategy != "default":
-        voices = select_voices(prompt, seed=seed, energy=energy, strategy=strategy)
-    else:
-        voices = voices_for(strategy)
+    # Instrumentation + drum kit come from the resolved profile (genre/mood/energy),
+    # varied per candidate by seed. The default kernel keeps all-sine voices + the
+    # kernel drum kit so the CLI/tests stay byte-identical.
+    voices = profile.voices
 
-    return {
+    result = {
         "schema": "rezn-ai.arrangement.v1",
         "identity": {
             "title": title,
@@ -455,3 +485,9 @@ def compose_arrangement(
             "swing": style.swing,
         },
     }
+    # Emit the kit only when it actually differs from the kernel (value equality, not
+    # name) — so a taste-modified but kernel-named kit isn't silently dropped, while
+    # the untouched default stays byte-identical.
+    if profile.drum_kit != DrumKit.kernel():
+        result["drum_kit"] = profile.drum_kit.to_dict()
+    return result

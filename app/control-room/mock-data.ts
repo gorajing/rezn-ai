@@ -17,11 +17,13 @@ export const DEFAULT_BRIEF: BriefControls = {
   candidateCount: 4,
 };
 
+// Four maximally-contrasting starter briefs — each maps to a different drum-kit
+// family (electronic / boom-bap / 808 / soft) so the generated drums sound distinct.
 export const EXAMPLE_PROMPTS = [
-  "Dark melodic techno, tense and hypnotic, 128 BPM",
-  "Warm lo-fi beat with a nostalgic Rhodes, 88 BPM",
-  "Cinematic synthwave build with a soaring lead",
-  "Minimal deep house, rolling bassline, late-night mood",
+  "Dark hypnotic techno, driving 909 kick, tense and minimal, 130 BPM",
+  "Dusty lo-fi hip-hop, swung boom-bap drums, warm Rhodes, 86 BPM",
+  "808 trap, booming sub kick, fast rolling hats, sparse and moody, 140 BPM",
+  "Atmospheric ambient, soft restrained percussion, evolving pads, slow",
 ];
 
 export const INITIAL_MESSAGES: ChatMessage[] = [

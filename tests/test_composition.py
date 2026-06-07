@@ -34,3 +34,30 @@ def test_generated_notes_stay_inside_midi_range():
             assert note["duration"] > 0
             assert note["velocity"] > 0
 
+
+def test_default_arrangement_omits_drum_kit():
+    """Kernel kit is omitted so the default arrangement JSON + audio stay byte-identical."""
+    arrangement = compose_arrangement(title="t", key="D#", mode="minor", tempo=128.0, seed=77)
+    assert "drum_kit" not in arrangement
+
+
+def test_strategy_arrangement_includes_distinct_drum_kit():
+    arrangement = compose_arrangement(
+        title="t", key="D#", mode="minor", tempo=128.0, seed=77,
+        strategy="groove_architect", prompt="dark techno",
+    )
+    assert "drum_kit" in arrangement
+    assert arrangement["drum_kit"]["name"] != "kernel"
+
+
+def test_default_strategy_with_taste_emits_modified_kit():
+    """Regression (Codex): taste must not be silently dropped on the default strategy.
+    apply_taste keeps the 'kernel' name, so gating omission on the name discarded the
+    taste-modified kit. Omission must key on value-equality with the kernel kit."""
+    arrangement = compose_arrangement(
+        title="t", key="D#", mode="minor", tempo=128.0, seed=77,
+        taste={"kick.drive": 1.0},
+    )
+    assert "drum_kit" in arrangement
+    assert arrangement["drum_kit"]["kick"]["drive"] > 0.0
+

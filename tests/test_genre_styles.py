@@ -157,3 +157,31 @@ def test_genre_auto_detected_from_prompt():
     )
     assert arr["identity"]["genre"] == "jazz"
     assert arr["provenance"]["swing"] > 0.0  # jazz applies swing
+
+
+def test_explicit_genre_is_case_normalized_in_output():
+    """Explicit genre casing is normalized so identity/provenance/strategy agree (Codex)."""
+    arr = compose_arrangement(
+        title="t", key="D#", mode="minor", tempo=128, seed=77,
+        strategy="groove_architect", genre="House",
+    )
+    assert arr["identity"]["genre"] == "house"
+    assert arr["provenance"]["genre"] == "house"
+
+
+def test_detect_genre_matches_word_starts_not_mid_word_substrings():
+    # The bug: "house" is embedded in "warehouse" and must not match.
+    assert detect_genre("dark warehouse techno") is None
+    # Legitimate matches still work — multi-word keywords and morphological suffixes.
+    assert detect_genre("deep house") == "house"
+    assert detect_genre("warm lo-fi beat") == "lofi"
+    assert detect_genre("liquid drum and bass") == "dnb"
+    assert detect_genre("funky clavinet groove") == "funk"  # suffix at a word start still matches
+
+
+def test_timbre_genre_family_uses_word_boundaries():
+    from rezn_ai.music.timbre import _genre_family
+
+    assert _genre_family("dark warehouse vibes") is None  # "house" no longer matches in "warehouse"
+    assert _genre_family("deep house") == "electronic_4x4"
+    assert _genre_family("dark warehouse techno") == "electronic_4x4"  # via "techno", not "house"

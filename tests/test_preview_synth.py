@@ -1,6 +1,13 @@
+import json
+import pathlib
+from dataclasses import replace
+
 from rezn_ai.eval.audio_metrics import measure_wav
 from rezn_ai.eval.mix_checks import evaluate_metrics
+from rezn_ai.music.sound_profile import DrumKit
 from rezn_ai.render.preview_synth import render_arrangement, write_preview_wav
+
+GOLDEN = pathlib.Path(__file__).parent / "fixtures" / "golden_arrangement.json"
 
 # Small, fast arrangement: a short pitched part plus one drum hit at 120 bpm.
 TINY_ARRANGEMENT = {
@@ -42,3 +49,24 @@ def test_preview_wav_is_valid_stereo_audio(tmp_path):
     assert checks["checks"]["not_silent"] is True
     assert checks["checks"]["peak_ok"] is True
     assert checks["checks"]["stereo"] is True
+
+
+def test_kernel_kit_matches_no_kit():
+    """An explicit kernel kit must render identically to no kit (byte-identity guard)."""
+    arr = json.loads(GOLDEN.read_text())
+    base_l, base_r, _ = render_arrangement(arr, sample_rate=44_100)
+    arr_kernel = {**arr, "drum_kit": DrumKit.kernel().to_dict()}
+    k_l, k_r, _ = render_arrangement(arr_kernel, sample_rate=44_100)
+    assert base_l.tobytes() == k_l.tobytes()
+    assert base_r.tobytes() == k_r.tobytes()
+
+
+def test_punchy_kit_changes_audio():
+    """A non-kernel kit must actually change the rendered drums."""
+    arr = json.loads(GOLDEN.read_text())
+    base_l, _, _ = render_arrangement(arr, sample_rate=44_100)
+    kernel = DrumKit.kernel()
+    punchy = replace(kernel, name="punchy", kick=replace(kernel.kick, drive=0.8, decay=0.12))
+    arr2 = {**arr, "drum_kit": punchy.to_dict()}
+    p_l, _, _ = render_arrangement(arr2, sample_rate=44_100)
+    assert p_l.tobytes() != base_l.tobytes()

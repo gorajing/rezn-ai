@@ -1,0 +1,205 @@
+"""SoundProfile: the single learnable sound description for one candidate.
+
+A ``SoundProfile`` bundles the arrangement ``Style`` (rhythm/density/dynamics),
+the pitched ``voices`` map (which synth patch renders each part), and a parametric
+``DrumKit`` (the drum *sound*). It is the spine the self-improving loop learns over.
+
+This is a **leaf module**: it does not import ``composition`` or ``preview_synth``
+at runtime, so those can import it without a cycle. ``DrumKit.kernel()`` reproduces
+``render.preview_synth._drum_hit``'s current synthesis constants exactly, so the
+default profile renders byte-identical (the two "effect" params — ``kick.drive`` and
+``hat.brightness`` — are bypassed at ``0.0``).
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import asdict, dataclass, field, replace
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # only for the annotation; never imported at runtime (avoids a cycle)
+    from .composition import Style
+
+
+# --------------------------------------------------------------------------- #
+# DrumKit — parametric drum synthesis params (kick/snare/hat). Crash is frozen.
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class KickSpec:
+    base_freq: float = 50.0
+    drop: float = 90.0
+    drop_rate: float = 32.0
+    decay: float = 0.18
+    drive: float = 0.0  # 0.0 -> bypass (byte-identical to the current kick)
+
+
+@dataclass(frozen=True)
+class SnareSpec:
+    tone_freq: float = 180.0
+    tone_mix: float = 0.4
+    noise_mix: float = 0.85
+    decay: float = 0.14
+
+
+@dataclass(frozen=True)
+class HatSpec:
+    decay: float = 0.035
+    brightness: float = 0.0  # 0.0 -> bypass (raw noise, byte-identical to the current hat)
+
+
+@dataclass(frozen=True)
+class DrumKit:
+    name: str = "kernel"
+    kick: KickSpec = field(default_factory=KickSpec)
+    snare: SnareSpec = field(default_factory=SnareSpec)
+    hat: HatSpec = field(default_factory=HatSpec)
+
+    @classmethod
+    def kernel(cls) -> "DrumKit":
+        """The default kit — reproduces today's _drum_hit byte-for-byte."""
+        return cls()
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DrumKit":
+        return cls(
+            name=data.get("name", "kernel"),
+            kick=KickSpec(**data["kick"]),
+            snare=SnareSpec(**data["snare"]),
+            hat=HatSpec(**data["hat"]),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# FeatureSpec registry — the single source of truth for the learnable space.
+# apply_taste(), SoundProfile.features(), and the persisted taste vector read it.
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class FeatureSpec:
+    min: float
+    max: float
+    default: float
+    learning_rate: float
+    applies_to: str = "all"
+
+
+FEATURE_SPECS: dict[str, FeatureSpec] = {
+    "kick.drive":      FeatureSpec(0.0, 1.0, 0.0, 0.15),
+    "kick.decay":      FeatureSpec(0.08, 0.40, 0.18, 0.10),
+    "snare.noise_mix": FeatureSpec(0.30, 1.0, 0.85, 0.10),
+    "snare.tone_mix":  FeatureSpec(0.0, 0.80, 0.40, 0.10),
+    "hat.brightness":  FeatureSpec(0.0, 1.0, 0.0, 0.15),
+    "hat.decay":       FeatureSpec(0.015, 0.12, 0.035, 0.10),
+}
+
+
+# --------------------------------------------------------------------------- #
+# SoundProfile
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class SoundProfile:
+    arrangement: "Style"
+    voices: dict[str, str]
+    drum_kit: DrumKit
+
+    def features(self) -> dict[str, float]:
+        """The learnable controllable features (dotted keys match FEATURE_SPECS)."""
+        return _kit_features(self.drum_kit)
+
+
+# --------------------------------------------------------------------------- #
+# Resolution: genre family + per-strategy bias + deterministic jitter; taste bias.
+# GENRE_KITS / STRATEGY_KIT_BIAS are filled in by the kit-tuning task; until then,
+# resolution still differentiates candidates via the per-(seed, strategy) jitter.
+# --------------------------------------------------------------------------- #
+
+# Genre kit families (keyed on detect_genre() output; None -> "electronic" default,
+# since techno/electronic detect as the "native" idiom). Starting values — tune by
+# ear; the FeatureSpec registry bounds them and _apply_features clamps on use.
+GENRE_KITS: dict[str, DrumKit] = {
+    "electronic": DrumKit("tight_909", KickSpec(decay=0.14, drive=0.25), SnareSpec(noise_mix=0.70), HatSpec(decay=0.028, brightness=0.5)),
+    "house":      DrumKit("house_909", KickSpec(decay=0.16, drive=0.15), SnareSpec(noise_mix=0.70), HatSpec(decay=0.030, brightness=0.4)),
+    "lofi":       DrumKit("boom_bap",  KickSpec(decay=0.22, drive=0.05), SnareSpec(noise_mix=0.60, tone_mix=0.50), HatSpec(decay=0.05, brightness=0.0)),
+    "trap":       DrumKit("808_trap",  KickSpec(base_freq=42.0, decay=0.38, drop_rate=18.0), SnareSpec(noise_mix=0.80), HatSpec(decay=0.025, brightness=0.6)),
+    "rock":       DrumKit("acoustic",  KickSpec(decay=0.20, drive=0.10), SnareSpec(noise_mix=0.60, tone_mix=0.55), HatSpec(decay=0.06, brightness=0.2)),
+    "funk":       DrumKit("funk",      KickSpec(decay=0.18, drive=0.10), SnareSpec(noise_mix=0.65, tone_mix=0.45), HatSpec(decay=0.04, brightness=0.3)),
+    "dnb":        DrumKit("breaky",    KickSpec(decay=0.16, drive=0.15), SnareSpec(noise_mix=0.80, tone_mix=0.30), HatSpec(decay=0.025, brightness=0.55)),
+    "ambient":    DrumKit("soft",      KickSpec(decay=0.20), SnareSpec(noise_mix=0.50), HatSpec(decay=0.05, brightness=0.0)),
+    "jazz":       DrumKit("brushes",   KickSpec(decay=0.20, drive=0.0), SnareSpec(noise_mix=0.45, tone_mix=0.55), HatSpec(decay=0.05, brightness=0.1)),
+    "blues":      DrumKit("shuffle",   KickSpec(decay=0.20, drive=0.08), SnareSpec(noise_mix=0.55, tone_mix=0.50), HatSpec(decay=0.06, brightness=0.2)),
+    "soul":       DrumKit("warm_kit",  KickSpec(decay=0.20, drive=0.08), SnareSpec(noise_mix=0.60, tone_mix=0.45), HatSpec(decay=0.045, brightness=0.25)),
+    "reggae":     DrumKit("one_drop",  KickSpec(decay=0.24, drive=0.05), SnareSpec(noise_mix=0.55, tone_mix=0.50), HatSpec(decay=0.04, brightness=0.2)),
+}
+
+# Per-strategy bias applied on top of the genre family (feature deltas; clamped on use).
+STRATEGY_KIT_BIAS: dict[str, dict[str, float]] = {
+    "groove_architect": {"kick.drive": 0.20, "hat.brightness": 0.15, "kick.decay": -0.02},
+    "harmony_driver":   {"kick.drive": -0.05, "snare.tone_mix": 0.10},
+    "texture_builder":  {"kick.drive": -0.10, "snare.noise_mix": -0.10, "hat.decay": 0.02},
+    "energy_curve":     {"kick.drive": 0.15, "hat.brightness": 0.20},
+    "wildcard_mutator": {"hat.brightness": 0.25, "snare.noise_mix": 0.10},
+}
+
+
+def _kit_features(kit: DrumKit) -> dict[str, float]:
+    return {
+        "kick.drive": kit.kick.drive,
+        "kick.decay": kit.kick.decay,
+        "snare.noise_mix": kit.snare.noise_mix,
+        "snare.tone_mix": kit.snare.tone_mix,
+        "hat.brightness": kit.hat.brightness,
+        "hat.decay": kit.hat.decay,
+    }
+
+
+def _clamp(feature: str, value: float) -> float:
+    spec = FEATURE_SPECS[feature]
+    return max(spec.min, min(spec.max, value))
+
+
+def _apply_features(kit: DrumKit, feats: dict[str, float], *, name: str) -> DrumKit:
+    def g(key: str, current: float) -> float:
+        return _clamp(key, feats.get(key, current))
+
+    kick = replace(kit.kick, drive=g("kick.drive", kit.kick.drive), decay=g("kick.decay", kit.kick.decay))
+    snare = replace(
+        kit.snare,
+        noise_mix=g("snare.noise_mix", kit.snare.noise_mix),
+        tone_mix=g("snare.tone_mix", kit.snare.tone_mix),
+    )
+    hat = replace(kit.hat, brightness=g("hat.brightness", kit.hat.brightness), decay=g("hat.decay", kit.hat.decay))
+    return DrumKit(name=name, kick=kick, snare=snare, hat=hat)
+
+
+def resolve_kit(*, genre: str | None, strategy: str, energy: float, seed: int) -> DrumKit:
+    """Deterministic drum kit for one candidate: genre family + per-strategy bias +
+    a small per-(seed, strategy) jitter. ``default`` short-circuits to the kernel kit
+    so the default render stays byte-identical."""
+    if strategy == "default":
+        return DrumKit.kernel()
+    family = (genre or "electronic").lower()  # case-normalized, like resolve_style
+    base = GENRE_KITS.get(family, DrumKit.kernel())
+    feats = _kit_features(base)
+    for key, delta in STRATEGY_KIT_BIAS.get(strategy, {}).items():
+        feats[key] = feats.get(key, FEATURE_SPECS[key].default) + delta
+    digest = hashlib.sha256(f"{seed}|{strategy}".encode("utf-8")).hexdigest()
+    feats["hat.brightness"] = feats["hat.brightness"] + ((int(digest[:8], 16) % 7) - 3) * 0.01
+    return _apply_features(base, feats, name=f"{family}:{strategy}")
+
+
+def apply_taste(kit: DrumKit, taste: dict[str, float], *, pull: float = 0.3) -> DrumKit:
+    """Nudge a kit's features toward learned taste targets (bounded, clamped).
+    Empty taste is a strict no-op."""
+    if not taste:
+        return kit
+    current = _kit_features(kit)
+    feats = dict(current)
+    for key, target in taste.items():
+        if key in current:
+            feats[key] = current[key] + pull * (target - current[key])
+    return _apply_features(kit, feats, name=kit.name)
