@@ -67,9 +67,14 @@ class AgentMemoryClient:
         except httpx.HTTPError as exc:
             logger.warning("Agent Memory unreachable: %s", exc)
             return {"backend": "agent_memory", "reachable": False, "url": self.base_url}
-        # A 404 means the store/endpoint path is wrong (not just unauthenticated),
-        # so the service is NOT usable — exclude it so the startup check fails fast.
-        reachable = resp.status_code < 500 and resp.status_code not in (401, 403, 404)
+        # Liveness, not correctness: reachable iff the host answered and the Bearer key
+        # was accepted. We deliberately do NOT treat 4xx (e.g. 404/405 from this
+        # undocumented bare-GET probe path) as unreachable — a healthy store can answer
+        # non-2xx here, and with best-effort taste writes a too-lenient startup check is
+        # low-cost, whereas blocking a healthy deploy is not. Only auth rejection
+        # (401/403) and 5xx / transport failure (the except above) count as unreachable.
+        # TODO: probe the redis-agent-memory SDK health() route for a precise check.
+        reachable = resp.status_code < 500 and resp.status_code not in (401, 403)
         return {
             "backend": "agent_memory",
             "reachable": reachable,

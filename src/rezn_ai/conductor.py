@@ -80,6 +80,14 @@ class BatchConductor:
                 "REZN_PRODUCTION is set — configure the Redis Cloud Agent Memory service."
             )
         self.producer_id = os.getenv("AGENT_MEMORY_PRODUCER_ID", "default")
+        # Capture the backend label once (it is constant per backend) so the taste
+        # success path never makes a live health() network call — keeping the happy
+        # path a single round-trip and the never-raise guarantee structural rather
+        # than dependent on each backend's health() implementation.
+        try:
+            self._taste_backend = self.taste.health().get("backend")
+        except Exception:
+            self._taste_backend = None
 
     def _record_feedback(self, candidate: Candidate, *, reaction: str | None, note: str | None) -> None:
         """Attach the human's judgment to the candidate's generation trace (best-effort)."""
@@ -294,7 +302,7 @@ class BatchConductor:
             self._event(candidate.batch_id, "taste.remembered",
                         f"Recorded {action} of {candidate.strategy} into taste memory.",
                         {"candidate_id": candidate.candidate_id, "action": action,
-                         "backend": self.taste.health().get("backend")})
+                         "backend": self._taste_backend})
         else:
             logger.warning("Taste memory write for %s did not persist (action=%s)",
                            candidate.candidate_id, action)

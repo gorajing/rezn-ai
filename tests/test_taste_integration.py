@@ -216,6 +216,51 @@ def test_approve_does_not_raise_when_taste_fails_even_if_required(tmp_path, monk
     assert "taste.write_failed" in events
 
 
+def test_reject_does_not_raise_when_taste_fails_even_if_required(tmp_path, monkeypatch):
+    """The never-500 guarantee holds for reject too (it runs _update_policy after
+    _record_taste, like approve) — not just the approve verb."""
+    engine = ReznGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
+    store = InMemoryStore()
+    cond = BatchConductor(store=store, engine=engine, artifacts_root=tmp_path, taste=_RaisingTaste())
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cand = batch.candidates[0]
+    monkeypatch.setattr("rezn_ai.conductor.agent_memory_required", lambda: True)
+    rejected = cond.reject_candidate(cand.candidate_id, note="too muddy")  # must NOT raise
+    assert rejected.status == "rejected"
+    events = [e.type for e in store.get_batch(batch.batch_id).events]
+    assert "taste.write_failed" in events
+
+
+class _HealthRaisesTaste:
+    """Writes succeed, but health() raises. The success-path event label must not be
+    fetched via a live health() call that could 500 an already-persisted approve."""
+
+    def recall_taste(self, *, producer_id, brief, limit=5):
+        from rezn_ai.memory.taste import TasteRecall, derive_bias
+
+        return TasteRecall(facts=[], bias=derive_bias([], brief=brief))
+
+    def remember_curation(self, *, producer_id, session_id, action, candidate, note=""):
+        return True
+
+    def health(self):
+        raise RuntimeError("health endpoint down")
+
+
+def test_approve_does_not_raise_when_backend_health_raises(tmp_path):
+    """The success-path backend label must not depend on a live health() call: a backend
+    whose health() raises must still let an approve succeed and record taste."""
+    engine = ReznGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
+    store = InMemoryStore()
+    cond = BatchConductor(store=store, engine=engine, artifacts_root=tmp_path, taste=_HealthRaisesTaste())
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(1)))
+    cand = batch.candidates[0]
+    approved = cond.approve_candidate(cand.candidate_id)  # must NOT raise
+    assert approved.status == "approved"
+    events = [e.type for e in store.get_batch(batch.batch_id).events]
+    assert "taste.remembered" in events
+
+
 # ── Confidence ramp (2B): taste strength scales with evidence ─────────────────
 
 def test_attach_policy_ramps_confidence_with_evidence(tmp_path):
