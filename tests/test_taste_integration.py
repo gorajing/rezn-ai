@@ -189,6 +189,80 @@ def test_request_variant_refuses_a_finalized_candidate(tmp_path):
     assert cond.store.get_candidate(cid).status == "final"  # not downgraded
 
 
+def test_curation_updates_taste_vector_contrastively(tmp_path):
+    """Approving a higher-kick.drive candidate and rejecting a lower one moves the
+    persistent taste vector toward more drive (the e2e learning closure)."""
+    from rezn_ai.music.sound_profile import DrumKit, apply_taste
+
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(4)))
+    by_drive = sorted(batch.candidates, key=lambda c: c.profile_features.get("kick.drive", 0.0))
+    low, high = by_drive[0], by_drive[-1]
+    assert high.profile_features["kick.drive"] > low.profile_features["kick.drive"]
+    cond.approve_candidate(high.candidate_id)
+    cond.reject_candidate(low.candidate_id, note="")
+    vec = cond.store.get_taste_vector(cond.producer_id)
+    assert vec.get("kick.drive", 0.0) > 0.0  # learned toward the approved (higher-drive) side
+    target = {k: v for k, v in vec.items() if k != "__count__"}
+    nudged = apply_taste(DrumKit.kernel(), target)
+    assert nudged.kick.drive > DrumKit.kernel().kick.drive  # taste raises drive on the kernel kit
+
+
+def test_taste_update_is_idempotent_approve_then_final(tmp_path):
+    """approve -> select_final on the same candidate must not double-count the vector."""
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(4)))
+    by_drive = sorted(batch.candidates, key=lambda c: c.profile_features.get("kick.drive", 0.0))
+    low, high = by_drive[0], by_drive[-1]
+    cond.approve_candidate(high.candidate_id)
+    cond.reject_candidate(low.candidate_id)
+    v1 = cond.store.get_taste_vector(cond.producer_id)
+    cond.select_final(batch.batch_id, high.candidate_id)  # same decision set (approved -> final)
+    v2 = cond.store.get_taste_vector(cond.producer_id)
+    assert v2.get("kick.drive") == v1.get("kick.drive")
+
+
+def test_refine_logs_explainable_policy_update(tmp_path):
+    """refine emits + persists a rezn-ai.taste-update.v1 object and a taste.updated event."""
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(4)))
+    by_drive = sorted(batch.candidates, key=lambda c: c.profile_features.get("kick.drive", 0.0))
+    cond.approve_candidate(by_drive[-1].candidate_id)
+    cond.reject_candidate(by_drive[0].candidate_id, note="too hypnotic, lost me")
+    child = cond.refine_batch(batch.batch_id)
+    decisions = cond.store.read_decisions(cond.producer_id)
+    assert decisions
+    upd = decisions[-1]
+    assert upd["schema"] == "rezn-ai.taste-update.v1"
+    assert upd["parent_batch_id"] == batch.batch_id
+    assert upd["reason"]
+    assert 0.0 <= upd["confidence"] <= 1.0
+    assert "taste.updated" in [e.type for e in child.events]
+
+
+def test_refine_avoids_a_rejected_trait_in_the_prompt_arm(tmp_path):
+    """A rejection note naming one of a strategy's descriptors moves that trait into
+    the arm's 'avoid' set, mutating the arm (A -> A1) for the next batch."""
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(4)))
+    groove = next(c for c in batch.candidates if c.strategy == "groove_architect")
+    cond.reject_candidate(groove.candidate_id, note="too hypnotic, lost me")
+    cond.refine_batch(batch.batch_id)
+    arm = cond.store.get_profile(cond.producer_id, "arm:groove_architect")
+    assert arm is not None
+    assert "hypnotic" in arm["avoid"]
+    assert arm["version"] >= 1
+
+
+def test_bare_rejection_leaves_taste_vector_unchanged(tmp_path):
+    """A bare rejection (no approved peer, no reason) must not move any feature."""
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cond.reject_candidate(batch.candidates[0].candidate_id)
+    vec = cond.store.get_taste_vector(cond.producer_id)
+    assert all(k == "__count__" for k in vec)  # only the event counter may change
+
+
 def test_approve_is_safe_without_weave(tmp_path):
     # Weave tracing is off in tests; feedback must degrade silently, not crash.
     cond = _conductor(tmp_path)

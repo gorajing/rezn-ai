@@ -19,9 +19,16 @@ from .config import agent_memory_required
 from .eval.preference import composite_score, taste_alignment
 from .eval.refinement_eval import compute_iteration_metrics, record_refinement_iteration
 from .generation.engine import CandidateResult, GeneratorEngine
+from .learning.policy_update import (
+    build_policy_update,
+    contrastive_feature_delta,
+    features_from_reason_text,
+    mutate_prompt_policy,
+)
 from .memory.local import LocalTasteMemory
 from .memory.taste import PlanningBias, TasteFact, TasteMemory, TasteRecall, derive_bias
 from .music.prompt_policy import select_prompt_policy
+from .music.sound_profile import FEATURE_SPECS
 from .tracing.weave_client import (
     add_call_feedback,
     weave_call_url,
@@ -35,6 +42,7 @@ from .models import (
     Candidate,
     MemoryLesson,
     new_id,
+    utc_now,
 )
 
 
@@ -126,6 +134,94 @@ class BatchConductor:
         return _dataclass_replace(
             bias, profile_weights=profile_weights, prompt_policies=prompt_policies
         )
+
+    def _update_policy(self, batch_id: str) -> dict | None:
+        """Recompute the producer's taste vector from this batch's FINAL decision set
+        — contrastive (approved minus rejected), idempotent, with no penalty for a
+        bare rejection. Returns the per-batch feature contribution (for the policy
+        object), or None on any error. Never raises into the request path.
+
+        Idempotency: each batch's contribution is stored and *replaced* on recompute,
+        so re-approving or approve->select-final can never double-count. The raw
+        accumulated delta is kept separately from the clamped target vector that
+        apply_taste reads.
+        """
+        try:
+            batch = self.store.get_batch(batch_id)
+            decided = [c for c in batch.candidates if c.status in ("approved", "final", "rejected")]
+            approved = [c for c in decided if c.status in ("approved", "final")]
+            rejected = [c for c in decided if c.status == "rejected"]
+            reason_features = features_from_reason_text(" ".join(c.feedback or "" for c in decided))
+            contrib = contrastive_feature_delta(
+                [c.profile_features for c in approved],
+                [c.profile_features for c in rejected],
+                reason_features=reason_features,
+            )
+            prior = self.store.get_profile(self.producer_id, f"contrib:{batch_id}") or {}
+            old_contrib = {k: float(v) for k, v in (prior.get("deltas") or {}).items()}
+            old_n = int(prior.get("n", 0))
+
+            acc = {
+                k: float(v)
+                for k, v in (self.store.get_profile(self.producer_id, "acc_delta") or {}).items()
+            }
+            for feature in set(contrib) | set(old_contrib):
+                acc[feature] = acc.get(feature, 0.0) - old_contrib.get(feature, 0.0) + contrib.get(feature, 0.0)
+                if abs(acc[feature]) < 1e-9:
+                    acc.pop(feature, None)
+
+            vector: dict[str, float] = {}
+            for feature, raw in acc.items():
+                spec = FEATURE_SPECS[feature]
+                target = max(spec.min, min(spec.max, spec.default + raw))
+                if abs(target - spec.default) > 1e-9:
+                    vector[feature] = round(target, 6)
+
+            current_count = int(self.store.get_taste_vector(self.producer_id).get("__count__", 0))
+            count = max(0, current_count - old_n + len(decided))
+            self.store.save_profile(self.producer_id, "acc_delta", acc)
+            self.store.save_profile(
+                self.producer_id, f"contrib:{batch_id}", {"deltas": contrib, "n": len(decided)}
+            )
+            self.store.save_taste_vector(self.producer_id, vector, count=count)
+            return contrib
+        except Exception as exc:
+            if agent_memory_required():
+                raise RuntimeError(f"Policy update failed: {exc}") from exc
+            return None
+
+    def _mutate_prompt_arms(self, parent: Batch) -> dict[str, str]:
+        """Evolve each strategy's prompt arm from the parent batch's decisions:
+        reward approved arms, and move any descriptor named in a rejection note into
+        the arm's ``avoid`` set (A -> A1). Returns a per-strategy human-readable
+        delta for the policy-update object. Best-effort; never raises.
+        """
+        deltas: dict[str, str] = {}
+        by_strategy: dict[str, list[Candidate]] = {}
+        for c in parent.candidates:
+            if c.status in ("approved", "final", "rejected"):
+                by_strategy.setdefault(c.strategy, []).append(c)
+        for strategy, cands in by_strategy.items():
+            try:
+                approved = [c for c in cands if c.status in ("approved", "final")]
+                rejected = [c for c in cands if c.status == "rejected"]
+                base = select_prompt_policy(self.store, self.producer_id, strategy)
+                reject_notes = " ".join(c.feedback or "" for c in rejected).lower()
+                rejected_descriptors = [d for d in base.descriptors if d.lower() in reject_notes]
+                current = base
+                if rejected_descriptors:
+                    current = mutate_prompt_policy(
+                        base, approved_descriptors=(), rejected_descriptors=rejected_descriptors
+                    )
+                    self.store.save_profile(self.producer_id, f"arm:{strategy}", current.to_dict())
+                    deltas[strategy] = f"{base.arm} -> {current.arm} (avoid {', '.join(rejected_descriptors)})"
+                reward = len(approved) - 0.5 * len(rejected)
+                if reward:
+                    self.store.update_prompt_arm(self.producer_id, current.arm, reward)
+                    deltas.setdefault(strategy, f"{current.arm} reward {reward:+g}")
+            except Exception:
+                continue
+        return deltas
 
     def _record_taste(self, candidate: Candidate, action: str, note: str = "") -> None:
         """Append a curation decision to the producer's taste profile (best-effort)."""
@@ -297,6 +393,7 @@ class BatchConductor:
         self._remember(candidate, approved=True)
         self._record_taste(candidate, "approved")
         self._record_feedback(candidate, reaction="👍", note=f"approved {candidate.strategy}")
+        self._update_policy(candidate.batch_id)
         self._event(candidate.batch_id, "candidate.approved",
                     f"Approved {candidate.strategy} candidate.", {"candidate_id": candidate_id})
         return candidate
@@ -317,6 +414,7 @@ class BatchConductor:
         self._remember(candidate, approved=False, note=note)
         self._record_taste(candidate, "rejected", note=note)
         self._record_feedback(candidate, reaction="👎", note=f"rejected: {note}" if note else "rejected")
+        self._update_policy(candidate.batch_id)
         self._event(candidate.batch_id, "candidate.rejected",
                     f"Rejected {candidate.strategy} candidate.", {"candidate_id": candidate_id, "note": note})
         return candidate
@@ -372,6 +470,7 @@ class BatchConductor:
         if not already_counted:
             self._record_taste(candidate, "final")
         self._record_feedback(candidate, reaction="🎯", note=f"selected as final ({candidate.strategy})")
+        self._update_policy(batch_id)
         self._event(batch_id, "batch.final_selected",
                     f"Selected final candidate ({candidate.strategy}).", {"candidate_id": candidate_id})
         return self.store.get_batch(batch_id)
@@ -496,6 +595,31 @@ class BatchConductor:
                     "sources": recall.bias.sources,
                 },
             )
+
+        # Explainable policy update: recompute the contrastive taste vector from the
+        # parent's final decision set (idempotent) and evolve the prompt arms, then
+        # persist + surface the rezn-ai.taste-update.v1 object so the next batch's
+        # changes are explainable.
+        feature_deltas = self._update_policy(parent_batch_id) or {}
+        prompt_deltas = self._mutate_prompt_arms(parent)
+        decided_count = len(approved) + len(rejected)
+        confidence = round(min(1.0, decided_count / max(1, len(parent_candidates))), 4)
+        policy_update = build_policy_update(
+            batch_id=child_id,
+            parent_batch_id=parent_batch_id,
+            approved=approved,
+            rejected=rejected,
+            feature_deltas=feature_deltas,
+            prompt_policy_deltas=prompt_deltas,
+            confidence=confidence,
+            created_at=utc_now(),
+        )
+        try:
+            self.store.append_decision(self.producer_id, policy_update)
+        except Exception:
+            if agent_memory_required():
+                raise
+        self._event(child_id, "taste.updated", policy_update["reason"], policy_update)
 
         for slot, strategy in enumerate(allocation):
             parent_cand = self._best_parent(parent_candidates, strategy, recall.bias.strategy_boosts)
