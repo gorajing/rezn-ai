@@ -2,43 +2,47 @@
 
 /* ── Theme tokens ──────────────────────────────────────────────────────────
    A single class on <body> (theme-dark | theme-light) swaps every color.
-   Components never hardcode color; they use the Tailwind aliases below. */
+   Components never hardcode color; they use the Tailwind aliases below.
+
+   Palette is a matte, low-saturation desert: deep warm charcoal, bone & sand
+   neutrals, and a single dusty-terracotta accent. Status colors are muted to
+   sage / ochre / clay so nothing reads neon. */
 
 body.theme-dark {
-  --bg: #0d0c0a;
-  --surface: #141310;
-  --surface2: #1a1916;
-  --surface3: #2a2720;
-  --border: rgba(255, 220, 160, 0.07);
-  --border2: rgba(255, 220, 160, 0.16);
-  --accent: #e8a87c;
-  --accent-dim: rgba(232, 168, 124, 0.12);
-  --green: #4ade80;
-  --amber: #fbbf24;
-  --red: #f87171;
-  --text-primary: #f2ede6;
-  --text-secondary: #8a8070;
-  --text-tertiary: #4a453d;
-  --glow: rgba(232, 168, 124, 0.04);
+  --bg: #100e0b;
+  --surface: #17150f;
+  --surface2: #1e1b14;
+  --surface3: #2a261d;
+  --border: rgba(240, 226, 200, 0.08);
+  --border2: rgba(240, 226, 200, 0.15);
+  --accent: #dd9a72;
+  --accent-dim: rgba(221, 154, 114, 0.12);
+  --green: #87b07f;
+  --amber: #d0a25a;
+  --red: #d07f6e;
+  --text-primary: #f3ede2;
+  --text-secondary: #998f7c;
+  --text-tertiary: #5b5446;
+  --glow: rgba(221, 154, 114, 0.025);
   color-scheme: dark;
 }
 
 body.theme-light {
-  --bg: #faf8f5;
-  --surface: #f4f1ec;
-  --surface2: #ffffff;
-  --surface3: #ede9e3;
-  --border: rgba(0, 0, 0, 0.07);
-  --border2: rgba(0, 0, 0, 0.14);
-  --accent: #e8611a;
-  --accent-dim: rgba(232, 97, 26, 0.10);
-  --green: #16a34a;
-  --amber: #d97706;
-  --red: #dc2626;
-  --text-primary: #1a1814;
-  --text-secondary: #6b6456;
-  --text-tertiary: #a89e92;
-  --glow: rgba(232, 97, 26, 0.025);
+  --bg: #f5efe5;
+  --surface: #efe8da;
+  --surface2: #fbf7ef;
+  --surface3: #e7dece;
+  --border: rgba(46, 36, 20, 0.10);
+  --border2: rgba(46, 36, 20, 0.17);
+  --accent: #b3633a;
+  --accent-dim: rgba(179, 99, 58, 0.10);
+  --green: #5a8a5f;
+  --amber: #a9772f;
+  --red: #b1503f;
+  --text-primary: #211c14;
+  --text-secondary: #6c6151;
+  --text-tertiary: #a89a85;
+  --glow: rgba(179, 99, 58, 0.02);
   color-scheme: light;
 }
 
@@ -58,8 +62,10 @@ body.theme-light {
   --color-fg: var(--text-primary);
   --color-muted: var(--text-secondary);
   --color-subtle: var(--text-tertiary);
-  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: var(--font-dm-mono);
+  --font-sans: var(--font-body), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-display: var(--font-display), ui-serif, Georgia, "Times New Roman", serif;
+  --font-mono: var(--font-dm-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 html,
@@ -76,17 +82,57 @@ body {
 body {
   background: var(--bg);
   color: var(--text-primary);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-body), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  letter-spacing: -0.005em;
 }
 
-/* Smooth theme switch on every element (colors only — never transforms). */
+/* ── Editorial display type ────────────────────────────────────────────────
+   The expressive heading face. Tight, confident tracking and optical sizing
+   for the large, centerpiece headlines. */
+.display-hero {
+  font-family: var(--font-display);
+  font-optical-sizing: auto;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 0.98;
+}
+.display-head {
+  font-family: var(--font-display);
+  font-optical-sizing: auto;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 1.05;
+}
+/* Understated editorial eyebrow/label — wide-tracked small caps. */
+.eyebrow {
+  font-family: var(--font-body);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-weight: 500;
+}
+
+/* Smooth, tasteful transitions (colors only — never transforms). A gentle
+   ease keeps hovers and theme switches calm rather than snappy. */
 *,
 *::before,
 *::after {
-  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease,
-    fill 0.3s ease, stroke 0.3s ease;
+  transition: background-color 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.25s cubic-bezier(0.4, 0, 0.2, 1), fill 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    stroke 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
 
 /* Quiet page wash behind the app, intentionally flatter than a typical AI dashboard glow. */
@@ -148,13 +194,32 @@ body::before {
     opacity: 1;
   }
 }
+/* Gentle, slower scene reveal for editorial sections (hero, scene headers). */
+@keyframes rezn-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 
 .rezn-rise {
   animation: rezn-rise 0.35s ease-out both;
+}
+.rezn-reveal {
+  animation: rezn-reveal 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .rezn-spin {
   animation: rezn-spin 0.7s linear infinite;
 }
 .rezn-pulse-border {
   animation: rezn-pulse-border 1.4s ease-in-out infinite;
+}
+
+/* Belt-and-suspenders: hide CopilotKit's floating dev inspector if it mounts anyway. */
+cpk-web-inspector {
+  display: none !important;
 }

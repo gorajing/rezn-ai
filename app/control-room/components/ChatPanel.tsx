@@ -1,17 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentAction, ChatMessage, CopilotContext } from "../types";
+import type { AgentAction, ChatMessage } from "../types";
 import { CheckIcon, ChevronDownIcon, SendIcon, SparkIcon, XIcon } from "./icons";
 
 type ChatPanelProps = {
   messages: ChatMessage[];
   busy: boolean;
   agentActions: AgentAction[];
-  context: CopilotContext;
-  hasBatch: boolean;
   onSubmit: (prompt: string) => void;
-  onSuggestion: (key: string) => void;
 };
 
 function fmtDur(a: AgentAction): string {
@@ -19,23 +16,7 @@ function fmtDur(a: AgentAction): string {
   return `${((a.durationMs ?? 0) / 1000).toFixed(1)}s`;
 }
 
-// Suggestions are keyed so the parent can map them to real actions; label is shown.
-const SUGGESTIONS: { key: string; label: string }[] = [
-  { key: "variant-top:raise energy", label: "↑ Raise energy on #1" },
-  { key: "variant-top:darker mood", label: "☾ Darker mood on #1" },
-  { key: "approve-top2", label: "✓ Approve top 2" },
-  { key: "refine", label: "⟳ Refine from feedback" },
-];
-
-export function ChatPanel({
-  messages,
-  busy,
-  agentActions,
-  context,
-  hasBatch,
-  onSubmit,
-  onSuggestion,
-}: ChatPanelProps) {
+export function ChatPanel({ messages, busy, agentActions, onSubmit }: ChatPanelProps) {
   const [value, setValue] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -62,24 +43,26 @@ export function ChatPanel({
   return (
     <aside className="flex w-[360px] shrink-0 flex-col border-r border-line bg-surface">
       {/* Header */}
-      <div className="flex items-center gap-2.5 border-b border-line px-4 py-3.5">
-        <span className="grid h-7 w-7 place-items-center rounded-lg bg-accent-dim text-accent">
+      <div className="flex items-center gap-3 border-b border-line px-5 py-4">
+        <span className="grid h-8 w-8 place-items-center rounded-full bg-accent-dim text-accent">
           <SparkIcon className="h-4 w-4" />
         </span>
         <div className="leading-tight">
-          <h2 className="text-sm font-semibold text-fg">Studio</h2>
+          <h2 className="display-head text-lg text-fg">Studio</h2>
           <p className="text-[11px] text-subtle">Describe it, curate it, refine it</p>
         </div>
       </div>
 
       {/* Conversation history */}
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
         {messages.map((m) => (
           <div key={m.id} className={`rezn-rise flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
             <div
               className={[
-                "max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
-                m.role === "user" ? "bg-accent text-bg" : "border border-line bg-surface-2 text-fg",
+                "max-w-[85%] overflow-hidden rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words [overflow-wrap:anywhere]",
+                m.role === "user"
+                  ? "rounded-br-md bg-accent text-bg"
+                  : "rounded-bl-md border border-line bg-surface-2 text-fg",
               ].join(" ")}
             >
               {m.content}
@@ -101,11 +84,11 @@ export function ChatPanel({
         )}
       </div>
 
-      {/* Section A — live CopilotKit actions */}
+      {/* Live agent actions — the one piece of session telemetry kept in the panel. */}
       <Section label="Actions" live={anyRunning}>
-        <div className="max-h-[150px] space-y-1 overflow-y-auto px-2 py-1">
+        <div className="max-h-[150px] space-y-1 overflow-y-auto px-4 py-1">
           {agentActions.length === 0 ? (
-            <p className="px-2 py-3 text-[11px] leading-snug text-subtle">
+            <p className="px-1 py-3 text-[11px] leading-snug text-subtle">
               Generation and curation actions appear here as you work through a batch.
             </p>
           ) : (
@@ -114,53 +97,9 @@ export function ChatPanel({
         </div>
       </Section>
 
-      {/* Section B — live session context (also exposed to CopilotKit). */}
-      <Section label="Session State">
-        <div className="px-2 py-1">
-          <div className="overflow-hidden rounded-lg">
-            {stateRows(context, hasBatch).map((row, i) => (
-              <div
-                key={row.k}
-                className={`grid grid-cols-[92px_1fr] gap-2 px-2.5 py-1.5 ${
-                  i % 2 === 0 ? "bg-surface" : "bg-surface-2"
-                }`}
-              >
-                <span className="text-[10px] uppercase tracking-wide text-subtle">{row.k}</span>
-                <span
-                  className={[
-                    "truncate text-[11px] leading-snug",
-                    row.accent ? "text-accent" : "text-fg",
-                    row.mono ? "font-mono" : "",
-                  ].join(" ")}
-                  title={row.v}
-                >
-                  {row.v}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </Section>
-
-      {/* Section C — suggested actions (trigger real actions) */}
-      <Section label="Suggestions">
-        <div className="flex flex-wrap gap-1.5 px-3 py-2">
-          {SUGGESTIONS.map((s) => (
-            <button
-              key={s.key}
-              onClick={() => onSuggestion(s.key)}
-              disabled={!hasBatch}
-              className="rounded-full border border-line-2 bg-surface-2 px-[11px] py-[5px] text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </Section>
-
       {/* Input */}
-      <div className="border-t border-line p-3">
-        <div className="flex items-end gap-2 rounded-2xl border border-line-2 bg-surface-2 p-2 focus-within:border-accent/50">
+      <div className="border-t border-line p-4">
+        <div className="flex items-end gap-2 rounded-2xl border border-line-2 bg-surface-2 p-2 transition-colors focus-within:border-accent/50">
           <textarea
             value={value}
             onChange={(e) => setValue(e.target.value)}
@@ -195,9 +134,9 @@ function Section({ label, live, children }: { label: string; live?: boolean; chi
     <div className="border-t border-line">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between px-4 py-2.5"
+        className="flex w-full items-center justify-between px-5 py-2.5"
       >
-        <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-subtle">
+        <span className="eyebrow flex items-center gap-1.5 text-[10px] text-subtle">
           {label}
           {live && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-good" />}
         </span>
@@ -232,7 +171,7 @@ function ActionRow({ action }: { action: AgentAction }) {
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className={`font-mono text-[12px] ${running ? "text-accent" : error ? "text-bad" : "text-muted"}`}>
+          <span className={`min-w-0 truncate font-mono text-[12px] ${running ? "text-accent" : error ? "text-bad" : "text-muted"}`}>
             {action.name}
           </span>
           <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-subtle">
@@ -246,27 +185,4 @@ function ActionRow({ action }: { action: AgentAction }) {
       </div>
     </div>
   );
-}
-
-// Build the live "what the copilot knows" rows from real context.
-function stateRows(
-  c: CopilotContext,
-  hasBatch: boolean,
-): { k: string; v: string; accent?: boolean; mono?: boolean }[] {
-  if (!hasBatch) {
-    return [
-      { k: "Intent", v: "Awaiting a brief", accent: true },
-      { k: "Status", v: "Idle — describe the music to begin" },
-    ];
-  }
-  return [
-    { k: "Intent", v: c.intent, accent: true },
-    { k: "Key", v: c.key },
-    { k: "Tempo", v: `${c.tempo} BPM`, mono: true },
-    { k: "Candidates", v: String(c.candidateCount), mono: true },
-    { k: "Top pick", v: `${c.topCandidate} (${c.topScore.toFixed(2)})`, accent: true },
-    { k: "Feedback", v: `Approved ${c.approved} · Rejected ${c.rejected}`, mono: true },
-    { k: "Iteration", v: String(c.iteration), mono: true },
-    { k: "Confidence", v: `${Math.round(c.confidence * 100)}%`, accent: true, mono: true },
-  ];
 }

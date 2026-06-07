@@ -10,12 +10,10 @@ const STATE_LABEL: Record<ServiceStatus["state"], string> = {
 
 export function SystemStatus({ services }: { services: ServiceStatus[] }) {
   return (
-    <div className="rounded-2xl border border-line bg-surface p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-          System Status
-        </h3>
-        <span className="text-[10px] uppercase tracking-wider text-accent">Sponsor stack</span>
+    <div className="rounded-2xl border border-line bg-surface p-5">
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="eyebrow text-[10px] text-muted">System Status</h3>
+        <span className="eyebrow text-[9px] text-accent">Sponsor stack</span>
       </div>
 
       <ul className="space-y-2.5">

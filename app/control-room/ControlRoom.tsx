@@ -344,26 +344,6 @@ export function ControlRoom() {
     say("assistant", "Ready for a new brief. What should we make next?");
   }, [pushEvent, say]);
 
-  // Suggested-action chips trigger real actions (via the chat-driven path so
-  // they show up as Copilot actions in the panel).
-  const handleSuggestion = useCallback(
-    (key: string) => {
-      say("user", key);
-      const top = candidates[0];
-      if (key.startsWith("approve-top2")) {
-        candidates.slice(0, 2).forEach((c) => void handleApprove(c.id, "chat"));
-        say("assistant", "Approved the top two candidates.");
-      } else if (key.startsWith("variant-top")) {
-        if (top) void handleVariant(top.id, "raise energy", "chat");
-      } else if (key.startsWith("refine")) {
-        void handleRefine("chat");
-      } else if (top) {
-        void handleVariant(top.id, key, "chat");
-      }
-    },
-    [candidates, handleApprove, handleVariant, handleRefine, say],
-  );
-
   const activeStep = useMemo(() => {
     if (batchStatus === "generating") return 2;
     if (batchStatus === "completed") return 5;
@@ -432,10 +412,7 @@ export function ControlRoom() {
           messages={messages}
           busy={batchStatus === "generating"}
           agentActions={agentActions}
-          context={copilotContext}
-          hasBatch={candidates.length > 0}
           onSubmit={(text) => handleSubmit(text, "ui")}
-          onSuggestion={handleSuggestion}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -458,7 +435,7 @@ export function ControlRoom() {
           />
         </main>
 
-        <aside className="hidden w-[260px] shrink-0 flex-col gap-4 border-l border-line bg-surface p-4 lg:flex">
+        <aside className="hidden w-[280px] shrink-0 flex-col gap-5 border-l border-line bg-surface p-5 lg:flex">
           <SystemStatus services={services} />
           <ActivityFeed events={events} />
         </aside>

@@ -15,7 +15,7 @@ function pct(v: number): string {
 export function ScoreBreakdown({ detail }: { detail: ScoreDetail }) {
   return (
     <div className="rounded-xl border border-line-2 bg-surface-2 p-3.5 text-left">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-subtle">
           Score model
         </span>
