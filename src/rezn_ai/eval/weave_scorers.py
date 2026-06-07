@@ -175,7 +175,8 @@ def run_evaluation(runs_root: str = "./runs/eval", base_seed: int = 42) -> None:
     """Run Weave Evaluation over the fixed brief dataset.
 
     Results are logged to the rezn-ai/rezn-ai Weave workspace so judges can
-    see scores and compare runs across RL iterations.
+    compare runs across iterations. For live within-session learning metrics,
+    see ``eval.refinement_eval`` (``rezn-refinement-loop`` evaluation).
 
     Args:
         runs_root:  Directory for generated run artifacts.

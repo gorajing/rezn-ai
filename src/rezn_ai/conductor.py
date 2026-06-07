@@ -17,6 +17,7 @@ from .agents.harness import APPROVE_BONUS, BASE_WEIGHT, MIN_WEIGHT, REJECT_PENAL
 from .agents.llm_agents import interpret_brief, reflect_on_feedback
 from .config import agent_memory_required
 from .eval.preference import composite_score, taste_alignment
+from .eval.refinement_eval import compute_iteration_metrics, record_refinement_iteration
 from .generation.engine import CandidateResult, GeneratorEngine
 from .memory.local import LocalTasteMemory
 from .memory.taste import TasteFact, TasteMemory, TasteRecall, derive_bias
@@ -469,10 +470,27 @@ class BatchConductor:
         child_scores = [c.technical_score for c in batch.candidates]
         top = child_scores[0] if child_scores else 0.0
         child_mean = round(sum(child_scores) / len(child_scores), 4) if child_scores else 0.0
-        delta_top = round(top - parent_top, 4)
-        delta_approved = round(top - parent_approved_top, 4)
-        delta_mean = round(child_mean - parent_mean, 4)
-        improved = delta_top > 0 or delta_approved > 0
+        metrics = compute_iteration_metrics(
+            parent_batch_id=parent_batch_id,
+            child_batch_id=child_id,
+            parent_top=parent_top,
+            parent_mean=parent_mean,
+            parent_approved_top=parent_approved_top,
+            child_top=top,
+            child_mean=child_mean,
+        )
+        delta_top = metrics.delta_top
+        delta_approved = metrics.delta_approved_top
+        delta_mean = metrics.delta_mean
+        improved = metrics.improved
+        weave_delta = record_refinement_iteration(
+            metrics,
+            brief_prompt=parent.brief.prompt,
+            strategy_weights=weights,
+            reflection_source=reflection.source,
+            approved_count=len(approved),
+            rejected_count=len(rejected),
+        )
         self._event(
             child_id,
             "refine.improved" if improved else "refine.plateau",
@@ -489,6 +507,7 @@ class BatchConductor:
                 "delta_approved_top": delta_approved,
                 "delta_mean": delta_mean,
                 "improved": improved,
+                "weave_iteration_delta": weave_delta,
             },
         )
         self._event(
