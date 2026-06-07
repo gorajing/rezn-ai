@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Non-JS toolchain dirs that must never be linted (root fix, not per-run):
+    // the Python virtualenv ships bundled vendor JS (jquery, polyfile templates)
+    // that otherwise floods eslint with parse errors and warnings.
+    ".venv/**",
+    "node_modules/**",
   ]),
 ]);
 
