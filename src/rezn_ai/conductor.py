@@ -14,6 +14,7 @@ from typing import Any
 import weave
 
 from .agents.harness import APPROVE_BONUS, BASE_WEIGHT, MIN_WEIGHT, REJECT_PENALTY, _allocate
+from .agents.llm_agents import interpret_brief
 from .generation.engine import CandidateResult, GeneratorEngine
 from .memory.local import LocalTasteMemory
 from .memory.taste import TasteMemory
@@ -97,13 +98,26 @@ class BatchConductor:
 
     @weave.op()
     def start_batch(self, request: BatchCreateRequest) -> Batch:
-        brief = request.brief
+        # The prompt drives the music: interpret the whole brief into key/mode/tempo/
+        # energy (W&B Inference when enabled, deterministic keyword fallback otherwise).
+        # interpret_brief is Weave-traced, so the "prompt -> musical decisions" step is
+        # visible in the trace.
+        raw = request.brief
+        interp = interpret_brief(raw.prompt, default_mode=raw.mode, default_tempo=raw.tempo)
+        brief = raw.model_copy(
+            update={"key": interp.key, "mode": interp.mode, "tempo": interp.tempo, "energy": interp.energy}
+        )
         batch_id = new_id("batch")
         self.store.save_batch(Batch(batch_id=batch_id, brief=brief, status="running"))
         self._event(
             batch_id, "batch.started",
-            f"Generating {brief.candidate_count} candidates for: {brief.prompt}",
-            {"candidate_count": brief.candidate_count, "key": brief.key, "mode": brief.mode, "tempo": brief.tempo},
+            f"{brief.prompt} → {brief.key} {brief.mode}, {brief.tempo:.0f} BPM "
+            f"(energy {brief.energy:.2f}) · {interp.intent}",
+            {
+                "candidate_count": brief.candidate_count,
+                "key": brief.key, "mode": brief.mode, "tempo": brief.tempo, "energy": brief.energy,
+                "intent": interp.intent, "interpretation_source": interp.source,
+            },
         )
 
         recall = self.taste.recall_taste(producer_id=self.producer_id, brief=brief)
