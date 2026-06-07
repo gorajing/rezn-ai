@@ -216,8 +216,9 @@ class RedisStore:
     # ── Batches (JSON per batch) ─────────────────────────────────────────────
 
     def save_batch(self, batch: Batch) -> Batch:
-        # `candidates` is a read-time projection; never persist it on the batch record.
-        self._r.set(batch_key(batch.batch_id), batch.model_dump_json(exclude={"candidates"}))
+        # `candidates` is a read-time projection and `events` live in the per-batch
+        # stream (the source of truth); never persist either on the batch record.
+        self._r.set(batch_key(batch.batch_id), batch.model_dump_json(exclude={"candidates", "events"}))
         return batch
 
     def _load_batch(self, batch_id: str) -> Batch:
@@ -228,6 +229,7 @@ class RedisStore:
 
     def get_batch(self, batch_id: str) -> Batch:
         batch = self._load_batch(batch_id)
+        batch.events = self._read_events(batch_id)
         batch.candidates = self.get_ranked_candidates(batch_id)
         batch.candidate_ids = [c.candidate_id for c in batch.candidates]
         return batch
@@ -242,10 +244,20 @@ class RedisStore:
             "ts": event.ts,
             "payload": json.dumps(event.payload),
         })
-        batch = self._load_batch(batch_id)
-        batch.events.append(event)
-        self.save_batch(batch)
-        return batch
+        return self.get_batch(batch_id)
+
+    def _read_events(self, batch_id: str) -> list[BatchEvent]:
+        """Reconstruct the batch event log from its Redis Stream (source of truth)."""
+        events: list[BatchEvent] = []
+        for _entry_id, fields in self._r.xrange(batch_events_key(batch_id)):
+            events.append(BatchEvent(
+                id=fields["id"],
+                type=fields["type"],
+                message=fields["message"],
+                ts=fields["ts"],
+                payload=json.loads(fields.get("payload") or "{}"),
+            ))
+        return events
 
     # ── Candidates (Hash per candidate, Sorted Set for ranking) ──────────────
 
