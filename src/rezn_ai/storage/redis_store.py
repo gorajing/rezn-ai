@@ -77,6 +77,25 @@ def redis_url_from_env() -> str:
     return f"{scheme}://{auth}{host}:{port}"
 
 
+def _ssl_kwargs_from_env(redis_url: str) -> dict[str, Any]:
+    """Cert config for a ``rediss://`` (TLS) connection, read from env. Empty for a
+    plain ``redis://`` URL. Lets Redis Cloud with a private CA be verified
+    (``REDIS_SSL_CA_CERTS``) or verification relaxed (``REDIS_SSL_CERT_REQS`` =
+    ``required`` | ``optional`` | ``none``) without code changes. redis-py already
+    enables TLS for ``rediss://`` and defaults ssl_cert_reqs to ``required``.
+    """
+    if not redis_url.startswith("rediss://"):
+        return {}
+    kwargs: dict[str, Any] = {}
+    ca_certs = os.getenv("REDIS_SSL_CA_CERTS")
+    if ca_certs:
+        kwargs["ssl_ca_certs"] = ca_certs
+    cert_reqs = os.getenv("REDIS_SSL_CERT_REQS")
+    if cert_reqs:
+        kwargs["ssl_cert_reqs"] = cert_reqs
+    return kwargs
+
+
 def redact_url(url: str) -> str:
     """Return ``url`` with any password masked, safe for logs and CLI output."""
     try:
@@ -235,6 +254,7 @@ class RedisStore:
                 socket_keepalive=True,
                 retry_on_timeout=True,
                 health_check_interval=30,
+                **_ssl_kwargs_from_env(redis_url),
             )
         self._state_ttl = (
             _state_ttl_from_env() if state_ttl_seconds is None else int(state_ttl_seconds)
