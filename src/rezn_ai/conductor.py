@@ -15,7 +15,14 @@ from pathlib import Path
 from typing import Any
 
 from .agents.harness import _allocate, reweight_from_candidates
-from .agents.llm_agents import interpret_brief, reflect_on_feedback
+from .agents.llm_agents import (
+    CriticInput,
+    inference_enabled,
+    interpret_brief,
+    judge_panel,
+    lens_critique,
+    reflect_on_feedback,
+)
 from .agents.roster import (
     COMPOSER_STRATEGIES,
     AGENT_ORCHESTRATOR,
@@ -24,7 +31,7 @@ from .agents.roster import (
     composer_agent_id,
     critic_agent_id,
 )
-from .config import agent_memory_required
+from .config import agent_memory_required, deep_mode_enabled, deep_mode_requested
 from .eval.preference import composite_score, taste_alignment
 from .eval.refinement_eval import (
     compute_iteration_metrics,
@@ -410,43 +417,48 @@ class BatchConductor:
             agent_name=agent_id,
         )
 
-    @staticmethod
-    def _lens_score(features: dict[str, float], lens: str) -> float:
-        """Deterministic critic lens over the score features already computed by
-        eval.scoring.technical_score — no LLM. groove/harmony/mix average disjoint
-        feature groups so the three critics genuinely disagree."""
-        groups = {
-            "groove": ("groove_density", "part_balance"),
-            "harmony": ("harmonic_variety", "voice_leading", "resolution", "register_range"),
-            "mix": ("audio_health", "dynamic_shape"),
-        }
-        keys = groups.get(lens, ())
-        vals = [float(features.get(k, 0.0)) for k in keys]
-        return round(sum(vals) / len(vals), 4) if vals else 0.0
-
     def _emit_panel_events(self, batch_id: str, candidates: list[Candidate]) -> None:
-        """The critic panel + judge: 3 lens critics each name their favorite, then the
-        judge announces the ranking. Each is its own Weave agent + agent.step event."""
+        """The critic panel + judge. Deep mode → the LLM lens critics + judge reason over
+        the batch; otherwise deterministic stand-ins (feature-mean lenses, technical-score
+        judge). Each runs inside its own Weave agent scope and emits an agent.step carrying
+        rationale + ranking + source. The judge SURFACES a ranking but does not re-sort
+        stored candidates (D6′ — the store has one ordering used by refinement too)."""
         if not candidates:
             return
+        inputs = [
+            CriticInput(
+                c.candidate_id, c.strategy, c.technical_score,
+                (c.scores or {}).get("features", {}) or {},
+            )
+            for c in candidates
+        ]
+        by_id = {c.candidate_id: c for c in candidates}
+        if deep_mode_requested() and not inference_enabled():
+            self._agent_event(
+                batch_id, AGENT_ORCHESTRATOR, "orchestrator",
+                "Deep mode requested but inference is unavailable — running the deterministic panel.",
+                {"warning": "deep_mode_unavailable"},
+            )
+        verdicts = []
         for lens in CRITIC_LENSES:
-            per = [
-                {"strategy": c.strategy, "score": self._lens_score((c.scores or {}).get("features", {}) or {}, lens)}
-                for c in candidates
-            ]
-            best = max(per, key=lambda row: row["score"])
             with self._agent_scope(batch_id, critic_agent_id(lens)):
+                verdict = lens_critique(lens, inputs)
+                verdicts.append(verdict)
+                fav = by_id.get(verdict.favorite)
                 self._agent_event(
                     batch_id, critic_agent_id(lens), "critic",
-                    f"{lens.title()} critic favors {best['strategy']} ({best['score']:.2f}).",
-                    {"lens": lens, "scores": per},
+                    f"{lens.title()} critic favors {fav.strategy if fav else '—'}: {verdict.rationale}",
+                    {"lens": lens, "favorite": verdict.favorite,
+                     "ranking": list(verdict.ranking), "source": verdict.source},
                 )
-        top = candidates[0]
         with self._agent_scope(batch_id, AGENT_JUDGE):
+            decision = judge_panel(inputs, verdicts)
+            win = by_id.get(decision.winner)
             self._agent_event(
                 batch_id, AGENT_JUDGE, "judge",
-                f"Judge ranked {len(candidates)} candidates — {top.strategy} leads at {top.technical_score}.",
-                {"winner": top.candidate_id, "top_score": top.technical_score},
+                f"Judge ranked {len(candidates)} — {win.strategy if win else '—'} wins: {decision.rationale}",
+                {"winner": decision.winner, "ranking": list(decision.ranking),
+                 "confidence": decision.confidence, "source": decision.source},
             )
 
     def _stamp_preference(
