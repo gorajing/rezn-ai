@@ -55,15 +55,17 @@ The new functions live in `agents/llm_agents.py` and follow the module's establi
 **Why panel-level, not per-candidate:** the engine *already* runs a per-candidate `critique()` (`rezn_engine.py:267` → `critic_score`). Adding per-candidate-per-lens critics would be 3×N redundant calls. Instead, each lens critic is a **panel reviewer**: one call that sees *all* candidates and ranks them through one lens. This matches the Phase 1 event shape ("Groove critic favors X"), costs only **+3 calls/batch**, and produces real comparative disagreement.
 
 ```
-lens_critique(lens, candidates) -> LensVerdict
-  input  per candidate: strategy, the lens's feature subset, the existing
-         per-candidate critic rationale (if present), a compact arrangement digest
-  output ranking: list[candidate_id] best→worst by this lens
-         favorite: candidate_id
-         rationale: <=2 sentences, lens-specific
-         per_candidate: {candidate_id: {score: 0..1, note: str}}
-         source: "llm" | "fallback"
+lens_critique(lens, candidates: list[CriticInput]) -> LensVerdict
+  CriticInput per candidate: candidate_id, strategy, technical_score, the full feature map
+              (the lens's feature subset is what the prompt surfaces)
+  LensVerdict ranking: tuple[candidate_id] best→worst by this lens (each id once)
+              favorite: candidate_id (== ranking[0])
+              rationale: <=30 words, lens-specific
+              source: "wandb_inference" | "fallback" | "fallback:<Reason>"
 ```
+(Consuming the per-candidate `critique()` rationale into the panel prompt is a deferred
+enhancement — the lens critics judge from strategy + the lens feature subset + technical
+score, which is sufficient for a comparative lens ranking.)
 
 - **Deterministic fallback = the existing `_lens_score`** over the lens's feature subset (already proven, already golden-safe). The fallback `ranking`/`favorite` are derived from those scores; `rationale` is a templated string.
 - Lens → feature subset (unchanged from Phase 1, weights from `eval/scoring.py`):
@@ -129,7 +131,7 @@ No new tracing code. Because Phase 1 already opens a per-agent session/turn arou
 | **lens critic** (new) | per lens, sees all | 3 | comparative ranking + rationale | feeds the judge |
 | **judge** (new) | per batch | 1 | reasoned ranking + winner + rationale | surfaced in its event (no stored reorder in P2, D6′) |
 
-The lens critics **consume** the per-candidate `critic` rationale where present (no re-derivation) and add the comparative, lens-specific view the judge needs.
+The lens critics add the comparative, lens-specific view the judge needs. (Folding the per-candidate `critic` rationale into the panel prompt is a deferred enhancement — see §4.1; the per-candidate `critic_score` already feeds `technical_score`, which the judge sees.)
 
 ## 10. Decisions
 

@@ -30,6 +30,9 @@ WANDB_INFERENCE_BASE_URL = "https://api.inference.wandb.ai/v1"
 DEFAULT_INFERENCE_MODEL = "openai/gpt-oss-120b"
 # Direct-OpenAI fallback model, used only when no W&B key is present.
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+# Per-call wall-clock cap on the deep-mode panel LLM calls so a hung/slow provider
+# degrades to the deterministic fallback (via the except) instead of blocking a batch.
+PANEL_CALL_TIMEOUT_S = 30.0
 
 # Per-strategy creative personas used to steer the LLM prompt (credit: Vijay's
 # strategy defaults). These shape *prompting* only; the deterministic fallback
@@ -408,6 +411,7 @@ def _llm_lens_verdict(lens: str, candidates: list[CriticInput]) -> LensVerdict:
         ],
         temperature=0.4,
         max_tokens=400,
+        timeout=PANEL_CALL_TIMEOUT_S,
     )
     return _coerce_lens_verdict(
         lens,
@@ -479,6 +483,7 @@ def _llm_judge(candidates: list[CriticInput], verdicts: list[LensVerdict]) -> Ju
         ],
         temperature=0.3,
         max_tokens=400,
+        timeout=PANEL_CALL_TIMEOUT_S,
     )
     return _coerce_judge(
         _parse_json_object(response.choices[0].message.content or ""), _fallback_judge(candidates)
