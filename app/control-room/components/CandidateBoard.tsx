@@ -1,19 +1,24 @@
 "use client";
 
 import type { BatchStatus, Candidate } from "../types";
-import { EXAMPLE_PROMPTS } from "../ui-defaults";
+import { EXAMPLE_PROMPTS, type ExamplePrompt } from "../ui-defaults";
 import { CandidateCard } from "./CandidateCard";
 import { SparkIcon } from "./icons";
+
+// The brief that drove the active batch — surfaced so a chip's synced key/mode/
+// tempo are visible at the batch level (a free-text brief has no genre label).
+export type ActiveBrief = { genre?: string; key: string; mode: string; tempo: number };
 
 type CandidateBoardProps = {
   batchStatus: BatchStatus;
   prompt: string | null;
+  brief: ActiveBrief | null;
   candidates: Candidate[];
   playingId: string | null;
   skeletonCount: number;
   canRefine: boolean;
   onRefine: () => void;
-  onExample: (prompt: string) => void;
+  onExample: (ex: ExamplePrompt) => void;
   onTogglePlay: (id: string) => void;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
@@ -23,7 +28,7 @@ type CandidateBoardProps = {
 };
 
 export function CandidateBoard(props: CandidateBoardProps) {
-  const { batchStatus, prompt, candidates, playingId, skeletonCount } = props;
+  const { batchStatus, prompt, brief, candidates, playingId, skeletonCount } = props;
 
   if (batchStatus === "idle") {
     return <EmptyState onExample={props.onExample} />;
@@ -37,6 +42,17 @@ export function CandidateBoard(props: CandidateBoardProps) {
         <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wider text-subtle">Current brief</p>
           <h2 className="truncate text-lg font-semibold text-fg">{prompt ?? "Untitled batch"}</h2>
+          {brief && (
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+              {brief.genre && (
+                <span className="rounded-md bg-surface-2 px-2 py-0.5 capitalize">{brief.genre}</span>
+              )}
+              <span className="rounded-md bg-surface-2 px-2 py-0.5">
+                {brief.key} {brief.mode}
+              </span>
+              <span className="rounded-md bg-surface-2 px-2 py-0.5 font-mono">{brief.tempo} BPM</span>
+            </div>
+          )}
         </div>
         {batchStatus !== "generating" && (
           <div className="flex shrink-0 items-center gap-4 text-right">
@@ -90,7 +106,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function EmptyState({ onExample }: { onExample: (p: string) => void }) {
+function EmptyState({ onExample }: { onExample: (ex: ExamplePrompt) => void }) {
   return (
     <div className="grid min-h-0 flex-1 place-items-center px-6 py-10">
       <div className="max-w-lg text-center">
@@ -108,11 +124,12 @@ function EmptyState({ onExample }: { onExample: (p: string) => void }) {
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           {EXAMPLE_PROMPTS.map((ex) => (
             <button
-              key={ex}
+              key={ex.prompt}
               onClick={() => onExample(ex)}
+              title={`${ex.genre} · ${ex.key} ${ex.mode} · ${ex.tempo} BPM`}
               className="rounded-full border border-line-2 bg-surface-2 px-3.5 py-2 text-xs text-muted transition-colors hover:border-accent/40 hover:bg-accent-dim hover:text-accent"
             >
-              {ex}
+              {ex.prompt}
             </button>
           ))}
         </div>

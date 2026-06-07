@@ -17,13 +17,31 @@ export const DEFAULT_BRIEF: BriefControls = {
   candidateCount: 4,
 };
 
-// Four maximally-contrasting starter briefs — each maps to a different drum-kit
-// family (electronic / boom-bap / 808 / soft) so the generated drums sound distinct.
-export const EXAMPLE_PROMPTS = [
-  "Dark hypnotic techno, driving 909 kick, tense and minimal, 130 BPM",
-  "Dusty lo-fi hip-hop, swung boom-bap drums, warm Rhodes, 86 BPM",
-  "808 trap, booming sub kick, fast rolling hats, sparse and moody, 140 BPM",
-  "Atmospheric ambient, soft restrained percussion, evolving pads, slow",
+// A starter chip: the prompt plus the key/mode/tempo the engine deterministically
+// resolves it to, so clicking a chip can sync the brief readout to what generates.
+export interface ExamplePrompt {
+  prompt: string;
+  genre: string; // human label for the brief readout (techno is the native idiom)
+  key: string;
+  mode: "major" | "minor";
+  tempo: number;
+}
+
+// Four maximally-contrasting starter briefs. Each resolves to a *different* genre
+// overlay + drum-kit family + tempo + mode in the real engine (music.brief_parser,
+// music.composition.GENRES, sound_profile.GENRE_KITS), so the generated previews
+// sound genuinely distinct:
+//   techno -> native 4/4, electronic/909 kit, minor, 130 BPM
+//   lo-fi  -> lofi overlay, boom_bap kit, swung maj7, major, 84 BPM
+//   jazz   -> jazz overlay, brushes kit, dorian swing + walking bass, major, 112 BPM
+//   trap   -> trap overlay, 808_trap kit, sparse min7, minor, 140 BPM
+// key/mode/tempo mirror interpret_brief()'s deterministic resolution so the UI
+// brief readout matches the generated candidates.
+export const EXAMPLE_PROMPTS: ExamplePrompt[] = [
+  { prompt: "Dark hypnotic techno, driving four-on-the-floor kick, tense and minimal, 130 BPM", genre: "techno", key: "G#", mode: "minor", tempo: 130 },
+  { prompt: "Dusty lo-fi hip-hop, swung boom-bap drums, warm nostalgic Rhodes, 84 BPM", genre: "lo-fi", key: "A#", mode: "major", tempo: 84 },
+  { prompt: "Smooth jazz trio, brushed swing drums, walking upright bass, warm and mellow, 112 BPM", genre: "jazz", key: "C", mode: "major", tempo: 112 },
+  { prompt: "808 trap, booming sub kick, fast rolling hi-hats, dark and sparse, 140 BPM", genre: "trap", key: "B", mode: "minor", tempo: 140 },
 ];
 
 export const INITIAL_MESSAGES: ChatMessage[] = [

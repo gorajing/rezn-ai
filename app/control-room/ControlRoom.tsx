@@ -17,11 +17,11 @@ import type {
   EventLevel,
   ServiceStatus,
 } from "./types";
-import { DEFAULT_BRIEF, INITIAL_EVENTS, INITIAL_MESSAGES, uid } from "./ui-defaults";
+import { DEFAULT_BRIEF, INITIAL_EVENTS, INITIAL_MESSAGES, uid, type ExamplePrompt } from "./ui-defaults";
 import { api, API_BASE, rankCandidates, type ApiBatch, type ApiEvent } from "../lib/api";
 import { TopBar } from "./components/TopBar";
 import { ChatPanel } from "./components/ChatPanel";
-import { CandidateBoard } from "./components/CandidateBoard";
+import { CandidateBoard, type ActiveBrief } from "./components/CandidateBoard";
 import { SystemStatus } from "./components/SystemStatus";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { CopilotBridge, type CopilotActionsApi } from "./CopilotBridge";
@@ -58,6 +58,7 @@ export function ControlRoom() {
   const [batchStatus, setBatchStatus] = useState<BatchStatus>("idle");
   const [batchId, setBatchId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState<string | null>(null);
+  const [activeBrief, setActiveBrief] = useState<ActiveBrief | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [services, setServices] = useState<ServiceStatus[]>(DEFAULT_SERVICES);
   const [agentActions, setAgentActions] = useState<AgentAction[]>([]);
@@ -138,9 +139,17 @@ export function ControlRoom() {
 
   // ── Step 1 + 2: brief -> generate ───────────────────────────────────────────
   const handleSubmit = useCallback(
-    async (text: string, source: AgentAction["source"] = "ui") => {
+    async (
+      text: string,
+      source: AgentAction["source"] = "ui",
+      controls?: { genre?: string; key: string; mode: "major" | "minor"; tempo: number },
+    ) => {
       if (batchStatus === "generating") return;
+      // A starter chip carries its key/mode/tempo; a free-text brief uses the
+      // defaults. Either way the brief readout reflects what we send.
+      const c = controls ?? { key: DEFAULT_BRIEF.key, mode: DEFAULT_BRIEF.mode, tempo: DEFAULT_BRIEF.tempo };
       setPrompt(text);
+      setActiveBrief({ genre: controls?.genre, key: c.key, mode: c.mode, tempo: c.tempo });
       setBatchStatus("generating");
       setCandidates([]);
       setPlayingId(null);
@@ -152,9 +161,9 @@ export function ControlRoom() {
       try {
         const batch = await api.startBatch({
           prompt: text,
-          key: DEFAULT_BRIEF.key,
-          mode: DEFAULT_BRIEF.mode,
-          tempo: DEFAULT_BRIEF.tempo,
+          key: c.key,
+          mode: c.mode,
+          tempo: c.tempo,
           candidate_count: DEFAULT_BRIEF.candidateCount,
         });
         doneEmbed();
@@ -165,6 +174,10 @@ export function ControlRoom() {
         doneRank();
         const top = rankCandidates(batch.candidates)[0];
         if (top) {
+          // Snap the brief readout to what the engine ACTUALLY resolved (the chip's
+          // values are only a pre-generation preview; with live inference the key/
+          // tempo can differ from the deterministic guess). Candidates share key/mode.
+          setActiveBrief((b) => ({ genre: b?.genre, key: top.key, mode: top.mode, tempo: top.tempo }));
           say(
             "assistant",
             `Generated ${batch.candidates.length} candidates. "${top.label}" leads at ${Math.round(
@@ -181,6 +194,14 @@ export function ControlRoom() {
       }
     },
     [batchStatus, applyBatch, pushEvent, say, trackAction],
+  );
+
+  // A starter chip generates with its own genre/key/mode/tempo (not the defaults),
+  // and syncs the brief readout to match.
+  const handleExample = useCallback(
+    (ex: ExamplePrompt) =>
+      handleSubmit(ex.prompt, "ui", { genre: ex.genre, key: ex.key, mode: ex.mode, tempo: ex.tempo }),
+    [handleSubmit],
   );
 
   // ── Step 3: curate ───────────────────────────────────────────────────────────
@@ -421,12 +442,13 @@ export function ControlRoom() {
           <CandidateBoard
             batchStatus={batchStatus}
             prompt={prompt}
+            brief={activeBrief}
             candidates={candidates}
             playingId={playingId}
             skeletonCount={DEFAULT_BRIEF.candidateCount}
             canRefine={canRefine}
             onRefine={handleRefine}
-            onExample={handleSubmit}
+            onExample={handleExample}
             onTogglePlay={handleTogglePlay}
             onApprove={handleApprove}
             onReject={handleReject}
