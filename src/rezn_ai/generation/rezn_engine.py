@@ -59,12 +59,14 @@ class ReznGeneratorEngine:
         guidance = list(bias.suggestions) if bias is not None else None
         policies = bias.prompt_policies if bias is not None else {}
         taste = bias.profile_weights if bias is not None else None
+        taste_strength = bias.confidence if bias is not None else 1.0
         policy_version = bias.policy_version if bias is not None else 0
         results = [
             self._render(
                 batch_id, artifacts_root, params, brief, guidance,
                 prompt_policy=policies.get(params.strategy),
                 taste=taste,
+                taste_strength=taste_strength,
                 policy_version=policy_version,
             )
             for params in plan
@@ -162,6 +164,7 @@ class ReznGeneratorEngine:
         parent_profile_id: str | None = None,
         prompt_policy: dict[str, Any] | None = None,
         taste: dict[str, float] | None = None,
+        taste_strength: float = 1.0,
         policy_version: int = 0,
     ) -> CandidateResult:
         candidate_id = new_id("cand")
@@ -202,8 +205,10 @@ class ReznGeneratorEngine:
             strategy=params.strategy,
             energy=energy,
             prompt=internal_prompt,
-            # The learned taste vector nudges the drum kit (empty -> no bias).
+            # The learned taste vector nudges the drum kit (empty -> no bias), scaled
+            # by how well-evidenced the taste is (taste_strength in [0, 1]).
             taste=(taste or None),
+            taste_strength=taste_strength,
         )
         arrangement_path = candidate_dir / "arrangement.json"
         write_json(arrangement_path, arrangement)

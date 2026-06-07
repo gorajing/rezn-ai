@@ -31,7 +31,14 @@ from .learning.policy_update import (
     mutate_prompt_policy,
 )
 from .memory.local import LocalTasteMemory
-from .memory.taste import PlanningBias, TasteFact, TasteMemory, TasteRecall, derive_bias
+from .memory.taste import (
+    CONFIDENCE_FULL,
+    PlanningBias,
+    TasteFact,
+    TasteMemory,
+    TasteRecall,
+    derive_bias,
+)
 from .music.prompt_policy import select_prompt_policy
 from .music.sound_profile import FEATURE_SPECS
 from .tracing.weave_client import (
@@ -135,6 +142,9 @@ class BatchConductor:
             vector = {}
         profile_weights = {k: float(v) for k, v in vector.items() if k != "__count__"}
         policy_version = int(vector.get("__count__", 0))
+        # Evidence ramp: the taste nudge reaches full strength only once it is backed
+        # by CONFIDENCE_FULL curation decisions; fewer apply it proportionally gentler.
+        confidence = round(min(1.0, policy_version / CONFIDENCE_FULL), 4)
         prompt_policies = {
             strategy: select_prompt_policy(self.store, self.producer_id, strategy).to_dict()
             for strategy in COMPOSER_STRATEGIES
@@ -144,6 +154,7 @@ class BatchConductor:
             profile_weights=profile_weights,
             prompt_policies=prompt_policies,
             policy_version=policy_version,
+            confidence=confidence,
         )
 
     def _policy_version(self) -> int:

@@ -6,6 +6,7 @@ import pytest
 
 from rezn_ai.conductor import BatchConductor
 from rezn_ai.generation.rezn_engine import ReznGeneratorEngine
+from rezn_ai.memory.taste import PlanningBias
 from rezn_ai.models import BatchCreateRequest, CreativeBrief, MemoryLesson
 from rezn_ai.storage.memory_store import InMemoryStore
 
@@ -213,6 +214,40 @@ def test_approve_does_not_raise_when_taste_fails_even_if_required(tmp_path, monk
     assert approved.status == "approved"
     events = [e.type for e in store.get_batch(batch.batch_id).events]
     assert "taste.write_failed" in events
+
+
+# ── Confidence ramp (2B): taste strength scales with evidence ─────────────────
+
+def test_attach_policy_ramps_confidence_with_evidence(tmp_path):
+    """The taste vector's __count__ becomes a confidence in [0, 1]: 1-2 decisions
+    nudge gently, full strength only once well-evidenced (CONFIDENCE_FULL=8). A
+    single noisy decision can't slam taste to full (anti-overfitting)."""
+    cond = _conductor(tmp_path)
+    cond.store.save_taste_vector(cond.producer_id, {"kick.drive": 0.2}, count=4)
+    assert cond._attach_policy(PlanningBias()).confidence == 0.5   # 4/8
+    cond.store.save_taste_vector(cond.producer_id, {"kick.drive": 0.2}, count=8)
+    assert cond._attach_policy(PlanningBias()).confidence == 1.0   # capped at full
+    cond.store.save_taste_vector(cond.producer_id, {"kick.drive": 0.2}, count=20)
+    assert cond._attach_policy(PlanningBias()).confidence == 1.0   # never exceeds 1
+    cond.store.save_taste_vector(cond.producer_id, {}, count=0)
+    assert cond._attach_policy(PlanningBias()).confidence == 0.0   # unproven -> none
+
+
+def test_confidence_ramp_scales_first_batch_taste(tmp_path):
+    """A fresh batch leans toward taste in proportion to evidence: low count yields
+    a gentler drum nudge than high count, in the same direction."""
+    def kick_drive(sub: str, count: int, weights: dict) -> float:
+        cond = _conductor(tmp_path / sub)
+        if count:
+            cond.store.save_taste_vector(cond.producer_id, weights, count=count)
+        batch = cond.start_batch(BatchCreateRequest(brief=_brief(1)))
+        return batch.candidates[0].profile_features["kick.drive"]
+
+    base = kick_drive("base", 0, {})                   # no taste
+    low = kick_drive("low", 2, {"kick.drive": 0.1})    # strength 0.25
+    full = kick_drive("full", 8, {"kick.drive": 0.1})  # strength 1.0
+    assert (low - base) != 0.0                  # taste IS applied at low evidence...
+    assert 0 < (low - base) < (full - base)     # ...but more gently than at full
 
 
 def test_select_final_is_fully_idempotent(tmp_path):

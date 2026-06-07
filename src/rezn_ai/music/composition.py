@@ -379,6 +379,7 @@ def resolve_profile(
     seed: int,
     prompt: str = "",
     taste: dict[str, float] | None = None,
+    taste_strength: float = 1.0,
 ) -> SoundProfile:
     """Full sound profile for a candidate: arrangement Style + pitched voices + a
     parametric DrumKit, optionally nudged toward learned taste. The voice/style logic
@@ -390,7 +391,7 @@ def resolve_profile(
         voices = voices_for(strategy)
     kit = resolve_kit(genre=genre, strategy=strategy, energy=energy, seed=seed)
     if taste:
-        kit = apply_taste(kit, taste)
+        kit = apply_taste(kit, taste, strength=taste_strength)
     return SoundProfile(arrangement=style, voices=voices, drum_kit=kit)
 
 
@@ -406,6 +407,7 @@ def compose_arrangement(
     prompt: str = "",
     genre: str | None = None,
     taste: dict[str, float] | None = None,
+    taste_strength: float = 1.0,
 ) -> dict[str, Any]:
     # Genre overlay (groove/swing/scale/chord idiom) is detected from the prompt
     # unless passed explicitly; None leaves the native kernel idiom untouched.
@@ -413,7 +415,8 @@ def compose_arrangement(
     if genre:
         genre = genre.lower()  # normalize explicit caller casing so all emitted fields agree
     profile = resolve_profile(
-        strategy=strategy, genre=genre, energy=energy, seed=seed, prompt=prompt, taste=taste
+        strategy=strategy, genre=genre, energy=energy, seed=seed, prompt=prompt,
+        taste=taste, taste_strength=taste_strength,
     )
     style = profile.arrangement
     scale = style.scale or mode  # a genre may swap the scale (dorian/blues/…)
