@@ -101,7 +101,8 @@ class AgentMemoryClient:
             topics = [t for t in (candidate.strategy, candidate.mode) if t]
             self._post_silently(self._path("long-term-memory"), {
                 "memories": [{
-                    "id": new_id("taste"),
+                    # Service requires IDs of [A-Za-z0-9-] only — new_id() uses '_'.
+                    "id": new_id("taste").replace("_", "-"),
                     "text": sentence,
                     "memoryType": "semantic",
                     "topics": topics,
@@ -142,7 +143,8 @@ class AgentMemoryClient:
     @staticmethod
     def _extract_memories(data: Any) -> list[dict]:
         if isinstance(data, dict):
-            return data.get("memories") or data.get("results") or []
+            # The search API returns matches under "items"; tolerate other shapes too.
+            return data.get("items") or data.get("memories") or data.get("results") or []
         if isinstance(data, list):
             return data
         return []
@@ -171,7 +173,10 @@ class AgentMemoryClient:
 
     def _post_silently(self, path: str, payload: dict) -> None:
         try:
-            self._client.post(path, json=payload)
+            resp = self._client.post(path, json=payload)
+            if resp.status_code >= 400:
+                logger.warning("Agent Memory write to %s returned %s: %s",
+                               path, resp.status_code, resp.text[:200])
         except httpx.HTTPError as exc:
             logger.warning("Agent Memory write to %s failed: %s", path, exc)
 
