@@ -3,7 +3,9 @@
 from rezn_ai.music.sound_profile import (
     DrumKit,
     FEATURE_SPECS,
+    GENRE_KITS,
     SoundProfile,
+    _kit_features,
     apply_taste,
     resolve_kit,
 )
@@ -49,3 +51,26 @@ def test_apply_taste_noop_when_empty_and_nudges_within_clamp():
     assert apply_taste(base, {}) == base
     nudged = apply_taste(base, {"kick.drive": 1.0})
     assert 0.0 < nudged.kick.drive <= 1.0
+
+
+def test_genre_kits_within_feature_bounds():
+    assert GENRE_KITS, "GENRE_KITS must be populated"
+    for name, kit in GENRE_KITS.items():
+        for fk, fv in _kit_features(kit).items():
+            spec = FEATURE_SPECS[fk]
+            assert spec.min <= fv <= spec.max, (name, fk, fv)
+
+
+def test_electronic_kit_is_punchier_than_kernel():
+    # A non-default strategy with no detected genre falls back to the electronic family.
+    kit = resolve_kit(genre=None, strategy="groove_architect", energy=0.5, seed=1)
+    assert kit.kick.drive > DrumKit.kernel().kick.drive
+
+
+def test_strategies_distinct_within_genre():
+    kits = {
+        s: resolve_kit(genre="house", strategy=s, energy=0.5, seed=1)
+        for s in ("groove_architect", "harmony_driver", "texture_builder", "energy_curve")
+    }
+    feats = {s: tuple(sorted(_kit_features(k).items())) for s, k in kits.items()}
+    assert len(set(feats.values())) == len(feats)

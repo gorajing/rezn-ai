@@ -118,8 +118,28 @@ class SoundProfile:
 # resolution still differentiates candidates via the per-(seed, strategy) jitter.
 # --------------------------------------------------------------------------- #
 
-GENRE_KITS: dict[str, DrumKit] = {}
-STRATEGY_KIT_BIAS: dict[str, dict[str, float]] = {}
+# Genre kit families (keyed on detect_genre() output; None -> "electronic" default,
+# since techno/electronic detect as the "native" idiom). Starting values — tune by
+# ear; the FeatureSpec registry bounds them and _apply_features clamps on use.
+GENRE_KITS: dict[str, DrumKit] = {
+    "electronic": DrumKit("tight_909", KickSpec(decay=0.14, drive=0.25), SnareSpec(noise_mix=0.70), HatSpec(decay=0.028, brightness=0.5)),
+    "house":      DrumKit("house_909", KickSpec(decay=0.16, drive=0.15), SnareSpec(noise_mix=0.70), HatSpec(decay=0.030, brightness=0.4)),
+    "lofi":       DrumKit("boom_bap",  KickSpec(decay=0.22, drive=0.05), SnareSpec(noise_mix=0.60, tone_mix=0.50), HatSpec(decay=0.05, brightness=0.0)),
+    "trap":       DrumKit("808_trap",  KickSpec(base_freq=42.0, decay=0.38, drop_rate=18.0), SnareSpec(noise_mix=0.80), HatSpec(decay=0.025, brightness=0.6)),
+    "rock":       DrumKit("acoustic",  KickSpec(decay=0.20, drive=0.10), SnareSpec(noise_mix=0.60, tone_mix=0.55), HatSpec(decay=0.06, brightness=0.2)),
+    "funk":       DrumKit("funk",      KickSpec(decay=0.18, drive=0.10), SnareSpec(noise_mix=0.65, tone_mix=0.45), HatSpec(decay=0.04, brightness=0.3)),
+    "dnb":        DrumKit("breaky",    KickSpec(decay=0.16, drive=0.15), SnareSpec(noise_mix=0.80, tone_mix=0.30), HatSpec(decay=0.025, brightness=0.55)),
+    "ambient":    DrumKit("soft",      KickSpec(decay=0.20), SnareSpec(noise_mix=0.50), HatSpec(decay=0.05, brightness=0.0)),
+}
+
+# Per-strategy bias applied on top of the genre family (feature deltas; clamped on use).
+STRATEGY_KIT_BIAS: dict[str, dict[str, float]] = {
+    "groove_architect": {"kick.drive": 0.20, "hat.brightness": 0.15, "kick.decay": -0.02},
+    "harmony_driver":   {"kick.drive": -0.05, "snare.tone_mix": 0.10},
+    "texture_builder":  {"kick.drive": -0.10, "snare.noise_mix": -0.10, "hat.decay": 0.02},
+    "energy_curve":     {"kick.drive": 0.15, "hat.brightness": 0.20},
+    "wildcard_mutator": {"hat.brightness": 0.25, "snare.noise_mix": 0.10},
+}
 
 
 def _kit_features(kit: DrumKit) -> dict[str, float]:
@@ -158,7 +178,7 @@ def resolve_kit(*, genre: str | None, strategy: str, energy: float, seed: int) -
     so the default render stays byte-identical."""
     if strategy == "default":
         return DrumKit.kernel()
-    base = GENRE_KITS.get(genre or "", DrumKit.kernel())
+    base = GENRE_KITS.get(genre or "electronic", DrumKit.kernel())
     feats = _kit_features(base)
     for key, delta in STRATEGY_KIT_BIAS.get(strategy, {}).items():
         feats[key] = feats.get(key, FEATURE_SPECS[key].default) + delta
