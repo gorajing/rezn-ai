@@ -56,6 +56,11 @@ class AgentMemoryClient:
     def _path(self, suffix: str) -> str:
         return f"/v1/stores/{self.store_id}/{suffix}"
 
+    @staticmethod
+    def _safe_id(value: str) -> str:
+        """Service IDs allow [A-Za-z0-9-] only; our ids (batch_*, taste_*) use '_'."""
+        return value.replace("_", "-")
+
     # ── Health ───────────────────────────────────────────────────────────────
 
     def health(self) -> dict[str, Any]:
@@ -86,10 +91,12 @@ class AgentMemoryClient:
         note: str = "",
     ) -> None:
         sentence = self._sentence(action, candidate, note)
+        sid = self._safe_id(session_id)
+        owner = self._safe_id(producer_id)
         # 1) Short-term session event (the service auto-promotes to long-term).
         self._post_silently(self._path("session-memory/events"), {
-            "sessionId": session_id,
-            "actorId": producer_id,
+            "sessionId": sid,
+            "actorId": owner,
             "role": "USER",
             "content": [{"text": sentence}],
             "createdAt": utc_now(),
@@ -101,14 +108,13 @@ class AgentMemoryClient:
             topics = [t for t in (candidate.strategy, candidate.mode) if t]
             self._post_silently(self._path("long-term-memory"), {
                 "memories": [{
-                    # Service requires IDs of [A-Za-z0-9-] only — new_id() uses '_'.
-                    "id": new_id("taste").replace("_", "-"),
+                    "id": self._safe_id(new_id("taste")),
                     "text": sentence,
                     "memoryType": "semantic",
                     "topics": topics,
                     "namespace": self.namespace,
-                    "sessionId": session_id,
-                    "ownerId": producer_id,
+                    "sessionId": sid,
+                    "ownerId": owner,
                 }]
             })
 
@@ -121,7 +127,7 @@ class AgentMemoryClient:
             "text": brief.prompt,
             "limit": limit,
             "filter": {
-                "ownerId": {"eq": producer_id},
+                "ownerId": {"eq": self._safe_id(producer_id)},
                 "namespace": {"eq": self.namespace},
             },
             "filterOp": "all",
