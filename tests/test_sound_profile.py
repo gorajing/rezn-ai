@@ -1,6 +1,12 @@
 """Tests for the SoundProfile data model, feature registry, and resolution."""
 
-from rezn_ai.music.sound_profile import DrumKit, SoundProfile, FEATURE_SPECS
+from rezn_ai.music.sound_profile import (
+    DrumKit,
+    FEATURE_SPECS,
+    SoundProfile,
+    apply_taste,
+    resolve_kit,
+)
 
 
 def test_kernel_reproduces_current_drum_hit_values():
@@ -24,3 +30,22 @@ def test_feature_specs_default_within_bounds():
     for name, spec in FEATURE_SPECS.items():
         assert spec.min <= spec.default <= spec.max, name
         assert spec.learning_rate > 0, name
+
+
+def test_resolve_kit_default_is_kernel():
+    """The default strategy must resolve to the exact kernel kit (byte-identity)."""
+    assert resolve_kit(genre=None, strategy="default", energy=0.5, seed=1) == DrumKit.kernel()
+
+
+def test_resolve_kit_deterministic_and_distinct_per_strategy():
+    a = resolve_kit(genre=None, strategy="groove_architect", energy=0.5, seed=1)
+    b = resolve_kit(genre=None, strategy="texture_builder", energy=0.5, seed=1)
+    assert a == resolve_kit(genre=None, strategy="groove_architect", energy=0.5, seed=1)
+    assert a != b
+
+
+def test_apply_taste_noop_when_empty_and_nudges_within_clamp():
+    base = DrumKit.kernel()
+    assert apply_taste(base, {}) == base
+    nudged = apply_taste(base, {"kick.drive": 1.0})
+    assert 0.0 < nudged.kick.drive <= 1.0
