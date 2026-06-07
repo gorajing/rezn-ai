@@ -124,3 +124,35 @@ def test_curation_opens_turn_in_lineage_conversation(tmp_path, rec, action):
     assert rec.sessions, "a session should be opened for the curation action"
     assert rec.sessions[0]["session_id"] == batch.batch_id  # lineage root
     assert rec.turns[0]["agent_name"] == "rezn-conductor"
+
+
+# ── Tracing must never break the request path (enter OR exit) ────────────────
+
+class _BoomScope:
+    """A context manager that raises on teardown — stands in for a Session/Turn
+    whose span-flush fails inside __exit__."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        raise RuntimeError("span flush failed")
+
+
+def test_agent_turn_swallows_exit_time_tracing_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("rezn_ai.conductor.weave_session", lambda **kw: _BoomScope())
+    monkeypatch.setattr("rezn_ai.conductor.weave_turn", lambda **kw: _BoomScope())
+    cond = _conductor(tmp_path)
+    # A teardown failure in tracing must NOT raise into the request path.
+    with cond._agent_turn(conversation_id="b1", user_message="x"):
+        pass
+
+
+def test_agent_turn_never_masks_a_real_body_exception(tmp_path, monkeypatch):
+    monkeypatch.setattr("rezn_ai.conductor.weave_session", lambda **kw: _BoomScope())
+    monkeypatch.setattr("rezn_ai.conductor.weave_turn", lambda **kw: _BoomScope())
+    cond = _conductor(tmp_path)
+    # The body's own error propagates even though tracing teardown also fails.
+    with pytest.raises(ValueError, match="boom"):
+        with cond._agent_turn(conversation_id="b1", user_message="x"):
+            raise ValueError("boom")

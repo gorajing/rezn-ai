@@ -73,3 +73,16 @@ def test_dedup_still_supersedes_under_cap(make_store, monkeypatch):
     kept = store.list_memories()
     assert len(kept) == 1
     assert kept[0].improvement_delta == 0.9
+
+
+def test_redis_cap_also_bounds_the_dedup_hash(monkeypatch):
+    """The cap must bound rezn:lessons:dedup in lockstep with the ZSET — keyed
+    lessons write a parallel hash field, so trimming only the ZSET would leak."""
+    from rezn_ai.storage.redis_store import lessons_dedup_key, lessons_key
+
+    monkeypatch.setattr("rezn_ai.storage.redis_store.MAX_LESSONS", 5, raising=False)
+    store = _redis()
+    for i in range(12):  # 12 distinct keyed lessons -> dedup writes 12 fields
+        store.remember(_lesson(i), improvement_delta=float(i))
+    assert store._r.zcard(lessons_key()) == 5
+    assert store._r.hlen(lessons_dedup_key()) == 5  # hash bounded, not leaking to 12

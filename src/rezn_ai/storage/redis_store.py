@@ -315,8 +315,27 @@ class RedisStore:
         """Trim the lessons sorted set to the top ``MAX_LESSONS`` by improvement_delta,
         dropping the weakest-signal lessons so the set cannot grow without bound across
         demo runs. Recall reads only the top few, so the cap never starves recall.
+
+        The dedup hash (``lessons_dedup_key``) is pruned in lockstep: a keyed lesson
+        writes a parallel hash field, so capping only the sorted set would leave that
+        hash growing forever. Evicted members' dedup fields are HDEL'd — but only when
+        the hash still points at the evicted member (a superseding write keeps its own
+        field).
         """
-        self._r.zremrangebyrank(lessons_key(), 0, -(MAX_LESSONS + 1))
+        key = lessons_key()
+        excess = int(self._r.zcard(key)) - MAX_LESSONS
+        if excess <= 0:
+            return
+        doomed = self._r.zrange(key, 0, excess - 1)  # the lowest-scored members
+        self._r.zremrangebyrank(key, 0, excess - 1)
+        dedup = lessons_dedup_key()
+        for member in doomed:
+            try:
+                dedup_key = json.loads(member).get("dedup_key")
+            except (TypeError, ValueError):
+                dedup_key = None
+            if dedup_key and self._r.hget(dedup, dedup_key) == member:
+                self._r.hdel(dedup, dedup_key)
 
     def recall_top_lessons(self, limit: int = 5) -> list[MemoryLesson]:
         entries = self._r.zrevrange(lessons_key(), 0, limit - 1, withscores=True)

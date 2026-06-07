@@ -74,3 +74,26 @@ def test_turn_helper_opens_real_turn_when_available(monkeypatch):
         pass
     assert seen["agent_name"] == "rezn-conductor"
     assert seen["user_message"] == "brief text"
+
+
+def test_session_helper_warns_once_when_initialized_sdk_throws(monkeypatch, caplog):
+    """Weave initialized but the agentic call throws (a public-preview SDK breakage)
+    must degrade to a no-op AND surface the reason once — not vanish silently."""
+    import logging
+
+    class _Broken:
+        def start_session(self, **kw):
+            raise RuntimeError("signature changed")
+
+        def start_turn(self, **kw):
+            raise RuntimeError("signature changed")
+
+        def get_client(self):
+            return object()
+
+    monkeypatch.setattr(wc, "_agents_weave", lambda: _Broken())
+    monkeypatch.setattr(wc, "_AGENTS_WARNED", False, raising=False)
+    with caplog.at_level(logging.WARNING):
+        with weave_session(agent_name="a", session_id="b"):
+            pass
+    assert any("agents" in r.message.lower() for r in caplog.records)

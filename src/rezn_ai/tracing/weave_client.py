@@ -6,6 +6,7 @@ app has one place to initialize Weave and one place to report whether tracing is
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -13,6 +14,18 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_WEAVE_PROJECT = "rezn-ai/rezn-ai"
+
+logger = logging.getLogger(__name__)
+_AGENTS_WARNED = False
+
+
+def _warn_agents_once(op: str, exc: Exception) -> None:
+    """Surface the FIRST agentic-SDK failure (the SDK is public preview) once per
+    process, so the Agents view silently going empty doesn't pass unnoticed."""
+    global _AGENTS_WARNED
+    if not _AGENTS_WARNED:
+        _AGENTS_WARNED = True
+        logger.warning("Weave Agents instrumentation disabled (%s failed: %s)", op, exc)
 
 
 @dataclass(frozen=True)
@@ -191,7 +204,8 @@ def weave_session(
             model=model,
             continue_parent_trace=False,
         )
-    except Exception:
+    except Exception as exc:
+        _warn_agents_once("start_session", exc)
         return nullcontext()
 
 
@@ -205,7 +219,8 @@ def weave_turn(*, user_message: str = "", agent_name: str = "", model: str = "")
         return nullcontext()
     try:
         return weave.start_turn(user_message=user_message, agent_name=agent_name, model=model)
-    except Exception:
+    except Exception as exc:
+        _warn_agents_once("start_turn", exc)
         return nullcontext()
 
 

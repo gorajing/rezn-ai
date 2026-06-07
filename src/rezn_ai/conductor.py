@@ -7,6 +7,7 @@ replaced is gone — see docs/adr/0002-generator-over-mix-conductor.md.
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import ExitStack, nullcontext
 from dataclasses import replace as _dataclass_replace
@@ -57,6 +58,29 @@ _AGENT_NAME = "rezn-conductor"
 # Once-per-parent prompt-arm mutation marker: bounded lifetime so these idempotency
 # markers self-expire (any real re-refinement happens far inside this window).
 _ARMMUT_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
+
+logger = logging.getLogger(__name__)
+
+
+class _SafeTurnScope:
+    """Wraps the Agents session+turn ExitStack so EXITING the trace can never raise
+    into the request path: a span-flush failure inside ``__exit__`` must not surface
+    as a 500 after the business mutation already succeeded. The body's own exception
+    is always re-raised — tracing teardown never masks a real error.
+    """
+
+    def __init__(self, stack: ExitStack) -> None:
+        self._stack = stack
+
+    def __enter__(self) -> "_SafeTurnScope":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+        try:
+            self._stack.__exit__(exc_type, exc_val, exc_tb)
+        except Exception:  # tracing teardown failed — observability only, never fatal
+            logger.warning("Weave agents turn teardown failed", exc_info=True)
+        return False  # never suppress the body's own exception
 
 
 class BatchConductor:
@@ -387,7 +411,7 @@ class BatchConductor:
         except Exception:
             stack.close()
             return nullcontext()
-        return stack
+        return _SafeTurnScope(stack)
 
     def _agent_turn_for_candidate(self, candidate_id: str, *, user_message: str) -> Any:
         """``_agent_turn`` keyed on a candidate's batch lineage. The candidate lookup is

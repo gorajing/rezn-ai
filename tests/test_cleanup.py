@@ -123,3 +123,64 @@ def test_find_memories_returns_raw_items_with_ids():
     items = client.find_memories(owner_id="default", text="score 0.72", limit=50)
     assert items and items[0]["id"] == "taste-1"
     assert items[0]["ownerId"] == "default"
+
+
+def test_delete_long_term_memory_raises_on_non_2xx():
+    """The delete-by-id contract is fail-loud: a non-2xx must raise, so a future
+    drop of raise_for_status() is caught by this test."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": "boom"})
+
+    client = _mem_client(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        client.delete_long_term_memory(["taste-x"])
+
+
+# ── cleanup_demo.py main() exit-code contract ────────────────────────────────
+
+def _load_cleanup():
+    """Load scripts/cleanup_demo.py as a module (scripts/ is not a package)."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "cleanup_demo.py"
+    spec = importlib.util.spec_from_file_location("cleanup_demo", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _patch_redis_ok(mod, monkeypatch):
+    monkeypatch.setattr(
+        mod, "RedisStore",
+        lambda redis_url=None: RedisStore(_client=fakeredis.FakeRedis(decode_responses=True)),
+    )
+
+
+def test_main_exits_nonzero_when_execute_delete_fails(monkeypatch):
+    mod = _load_cleanup()
+    _patch_redis_ok(mod, monkeypatch)
+
+    class _Boom:
+        def delete_long_term_memory(self, ids):
+            raise RuntimeError("HTTP 500")
+
+        def find_memories(self, **kw):
+            return []
+
+    monkeypatch.setattr(mod, "_agent_memory_client", lambda: _Boom())
+    assert mod.main(["--execute", "--memory-ids", "taste-a"]) == 1
+
+
+def test_main_exits_nonzero_when_delete_requested_but_unconfigured(monkeypatch):
+    mod = _load_cleanup()
+    _patch_redis_ok(mod, monkeypatch)
+    monkeypatch.setattr(mod, "_agent_memory_client", lambda: None)
+    assert mod.main(["--execute", "--memory-ids", "taste-a"]) == 1
+
+
+def test_main_exits_zero_on_clean_dry_run(monkeypatch):
+    mod = _load_cleanup()
+    _patch_redis_ok(mod, monkeypatch)
+    monkeypatch.setattr(mod, "_agent_memory_client", lambda: None)
+    assert mod.main([]) == 0

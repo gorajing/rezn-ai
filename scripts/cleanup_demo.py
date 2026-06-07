@@ -20,7 +20,7 @@ Dry-run prints what WOULD change and mutates nothing. Pass ``--execute`` to act.
     uv run --env-file .env python scripts/cleanup_demo.py --find-owner default --find-text "score 0.72"
     uv run --env-file .env python scripts/cleanup_demo.py --execute --memory-ids taste-a,taste-b
 
-Exit code is 0 unless the Redis purge itself errored.
+Exit code is 0 unless the Redis purge or a requested Agent-Memory delete failed.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def _agent_memory_client():
     return AgentMemoryClient(base_url=url, store_id=store_id, api_key=api_key)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Purge demo run-state + doctor memories (DRY-RUN by default)."
     )
@@ -64,7 +64,7 @@ def main() -> int:
                     help="list Agent Memory memories under this ownerId (review aid)")
     ap.add_argument("--find-text", default="",
                     help="text to rank the --find-owner search by, e.g. 'score 0.72'")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     report: dict[str, object] = {"mode": "execute" if args.execute else "dry-run"}
     ok = True
@@ -80,9 +80,14 @@ def main() -> int:
         ok = False
 
     # 2) Agent Memory long-term doctor/test memories (REST delete-by-id).
+    requested_ids = [m for m in (s.strip() for s in args.memory_ids.split(",")) if m]
     client = _agent_memory_client()
     if client is None:
         report["agent_memory"] = "not configured (AGENT_MEMORY_URL/STORE_ID/API_KEY unset)"
+        if requested_ids:
+            # A destructive delete was requested but cannot be performed — fail loud.
+            report["agent_memory_error"] = "delete requested but Agent Memory is not configured"
+            ok = False
     else:
         if args.find_owner:
             try:
@@ -93,16 +98,16 @@ def main() -> int:
                     for m in found
                 ]
             except Exception as exc:
-                report["agent_memory_find_error"] = str(exc)
-        ids = [m for m in (s.strip() for s in args.memory_ids.split(",")) if m]
-        if ids:
+                report["agent_memory_find_error"] = str(exc)  # read-only aid; not fatal
+        if requested_ids:
             if args.execute:
                 try:
-                    report["agent_memory_deleted"] = client.delete_long_term_memory(ids)
+                    report["agent_memory_deleted"] = client.delete_long_term_memory(requested_ids)
                 except Exception as exc:
                     report["agent_memory_delete_error"] = str(exc)
+                    ok = False  # a requested destructive delete failed — exit non-zero
             else:
-                report["agent_memory_would_delete"] = ids
+                report["agent_memory_would_delete"] = requested_ids
 
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if ok else 1
