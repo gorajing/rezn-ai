@@ -15,12 +15,15 @@ that records parent→child score movement after every ``refine_batch``.
 
 from __future__ import annotations
 
+import atexit
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from ..tracing.weave_client import weave_op
 
 REFINEMENT_EVAL_NAME = "rezn-refinement-loop"
+_REFINEMENT_EVAL_LOGGER: Any | None = None
+_REFINEMENT_EVAL_LOGGER_REGISTERED = False
 
 
 @dataclass(frozen=True)
@@ -159,9 +162,7 @@ def _log_imperative_eval_row(
     if not os.getenv("WANDB_API_KEY"):
         return
 
-    from weave.evaluation.eval_imperative import EvaluationLogger
-
-    ev = EvaluationLogger(name=REFINEMENT_EVAL_NAME)
+    ev = _refinement_eval_logger()
     pred = ev.log_prediction(
         inputs={
             "parent_batch_id": metrics.parent_batch_id,
@@ -183,4 +184,36 @@ def _log_imperative_eval_row(
     pred.log_score("reward", metrics.reward)
     pred.log_score("improved", 1.0 if metrics.improved else 0.0)
     pred.finish()
-    ev.finish()
+
+
+def _refinement_eval_logger() -> Any:
+    """One long-lived imperative evaluation per process.
+
+    ``EvaluationLogger`` supports repeated ``log_prediction`` calls and the
+    installed Weave package already has a global atexit cleanup. We keep our own
+    small finalizer so tests can assert local behavior and so request handling only
+    finishes each prediction, not the whole evaluation.
+    """
+    global _REFINEMENT_EVAL_LOGGER, _REFINEMENT_EVAL_LOGGER_REGISTERED
+
+    if _REFINEMENT_EVAL_LOGGER is None:
+        from weave.evaluation.eval_imperative import EvaluationLogger
+
+        _REFINEMENT_EVAL_LOGGER = EvaluationLogger(name=REFINEMENT_EVAL_NAME)
+    if not _REFINEMENT_EVAL_LOGGER_REGISTERED:
+        atexit.register(_finish_refinement_eval_logger)
+        _REFINEMENT_EVAL_LOGGER_REGISTERED = True
+    return _REFINEMENT_EVAL_LOGGER
+
+
+def _finish_refinement_eval_logger() -> None:
+    """Best-effort process-exit finish; never runs on the request path."""
+    global _REFINEMENT_EVAL_LOGGER
+
+    ev = _REFINEMENT_EVAL_LOGGER
+    if ev is None:
+        return
+    try:
+        ev.finish()
+    except Exception:
+        pass

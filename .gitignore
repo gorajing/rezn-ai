@@ -36,6 +36,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.openapi.tmp.json
 
 # ── Generated run artifacts (large WAVs); keep the folder, not its contents ──
 runs/*

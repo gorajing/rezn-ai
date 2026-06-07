@@ -182,6 +182,23 @@ def test_local_taste_recall_from_seeded_lessons():
     assert taste.health() == {"backend": "local_lessons", "reachable": True}
 
 
+def test_local_taste_recall_ignores_other_producers_lessons():
+    store = InMemoryStore()
+    store.remember(
+        MemoryLesson(
+            body="groove_architect in D# minor was approved at score 0.8",
+            strategy="groove_architect",
+            tags=["producer:alice", "groove_architect", "minor"],
+        ),
+        improvement_delta=2.0,
+    )
+
+    recall = LocalTasteMemory(store).recall_taste(producer_id="bob", brief=_brief())
+
+    assert recall.facts == []
+    assert recall.bias.is_empty
+
+
 def test_local_taste_penalizes_rejections():
     store = InMemoryStore()
     store.remember(

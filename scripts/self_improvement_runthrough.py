@@ -86,6 +86,31 @@ def _top(batch) -> float:
     return round(max(scores), 4) if scores else 0.0
 
 
+def _runthrough_succeeded(report: dict) -> bool:
+    """True when the proof shows learning happened and quality did not regress.
+
+    The first refine step can improve relative to the approved parent even when the
+    absolute top candidate dips. The conductor records that as ``refine.improved``.
+    A fresh post-learning batch beating the initial top is also valid proof that
+    Redis policy changed the next generation in the right direction.
+    """
+    policy = report.get("redis_policy", {})
+    learned = bool(policy.get("taste_vector")) or bool(policy.get("prompt_arms"))
+    if not learned:
+        return False
+
+    rounds = report.get("rounds", [])
+    initial_top = rounds[0].get("top", 0.0) if len(rounds) > 0 else report.get("initial_top", 0.0)
+    refine = rounds[1] if len(rounds) > 1 else {}
+    next_batch = rounds[2] if len(rounds) > 2 else {}
+
+    return (
+        report.get("delta_top", 0.0) >= 0
+        or refine.get("improvement_event") == "refine.improved"
+        or next_batch.get("top", 0.0) >= initial_top
+    )
+
+
 def main() -> int:
     weave_status = initialize_weave()
     store, store_kind = _build_store()
@@ -169,9 +194,9 @@ def main() -> int:
     }
 
     print(json.dumps(report, indent=2, sort_keys=True))
-    # Success = the loop improved (or held) AND the Redis policy actually changed.
-    learned = bool(report["redis_policy"]["taste_vector"]) or bool(report["redis_policy"]["prompt_arms"])
-    return 0 if (report["delta_top"] >= 0 and learned) else 1
+    # Success = the loop improved/held by the conductor metric or by the next
+    # Redis-driven generation, and the Redis policy actually changed.
+    return 0 if _runthrough_succeeded(report) else 1
 
 
 if __name__ == "__main__":

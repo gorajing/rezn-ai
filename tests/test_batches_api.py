@@ -113,8 +113,8 @@ def test_api_exposes_internal_prompt_and_profile_metadata(client) -> None:
     assert cand["drum_kit"].get("name")
     assert cand["prompt_policy"].get("arm")
     assert cand["sound_profile"].get("profile_id") == cand["profile_id"]
-    # Per-candidate Weave trace link is present.
-    assert cand["trace_url"]
+    # No generic workspace fallback: only real per-call traces get links.
+    assert cand["trace_url"] is None
 
 
 def test_get_candidate_not_found(client) -> None:

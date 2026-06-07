@@ -345,7 +345,7 @@ export function CandidateCard({
       </p>
 
       {/* Actions */}
-      <div className="grid grid-cols-4 gap-2">
+      <div className={`grid gap-2 ${candidate.traceUrl ? "grid-cols-4" : "grid-cols-3"}`}>
         <ActionButton
           label="Approve"
           tone="approve"
@@ -361,7 +361,9 @@ export function CandidateCard({
           icon={<XIcon className="h-3.5 w-3.5" />}
         />
         <ActionButton label="Variant" tone="variant" onClick={onVariant} icon={<WandIcon className="h-3.5 w-3.5" />} />
-        <ActionButton label="Trace" tone="trace" onClick={onTrace} icon={<TraceIcon className="h-3.5 w-3.5" />} />
+        {candidate.traceUrl && (
+          <ActionButton label="Trace" tone="trace" onClick={onTrace} icon={<TraceIcon className="h-3.5 w-3.5" />} />
+        )}
       </div>
     </article>
   );

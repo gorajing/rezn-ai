@@ -20,6 +20,7 @@ _STOPWORDS = frozenset(
      "is", "was", "be", "this", "that", "it", "its", "from", "by", "as", "no"}
 )
 _MODES = ("minor", "major")
+_PRODUCER_TAG_PREFIX = "producer:"
 
 
 def _tokens(text: str) -> set[str]:
@@ -63,6 +64,13 @@ class LocalTasteMemory:
                 continue
             body = getattr(lesson, "body", "") or ""
             tags = list(getattr(lesson, "tags", []) or [])
+            producer_tags = [tag for tag in tags if tag.startswith(_PRODUCER_TAG_PREFIX)]
+            if producer_tags:
+                expected = f"{_PRODUCER_TAG_PREFIX}{producer_id}"
+                if expected not in producer_tags:
+                    continue
+            elif producer_id != "default":
+                continue
             overlap = brief_tokens & _tokens(body + " " + " ".join(tags))
             relevance = 1.0 + 0.5 * len(overlap)
             # Approvals contribute positive weight; rejections contribute negative.

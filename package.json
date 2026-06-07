@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "generate:api-types": "REZN_DISABLE_REDIS=true uv run python scripts/export_openapi.py .openapi.tmp.json && openapi-typescript .openapi.tmp.json -o app/lib/api-types.ts && rm .openapi.tmp.json"
   },
   "dependencies": {
     "@copilotkit/react-core": "^1.59.5",
@@ -23,6 +24,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.7",
+    "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

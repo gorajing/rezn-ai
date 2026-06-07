@@ -48,7 +48,6 @@ from .tracing.weave_client import (
     weave_op,
     weave_session,
     weave_turn,
-    weave_workspace_url,
 )
 from .models import (
     Batch,
@@ -348,11 +347,7 @@ class BatchConductor:
         return f"/artifacts/{rel.as_posix()}"
 
     def _to_candidate(self, result: CandidateResult, batch_id: str, *, parent_id: str | None = None) -> Candidate:
-        trace = (
-            weave_call_url(result.weave_call_id)
-            if result.weave_call_id
-            else weave_workspace_url()
-        )
+        trace = weave_call_url(result.weave_call_id) if result.weave_call_id else None
         return Candidate(
             candidate_id=result.candidate_id,
             batch_id=batch_id,
@@ -918,11 +913,11 @@ class BatchConductor:
             MemoryLesson(
                 body=body,
                 strategy=candidate.strategy,
-                tags=[candidate.strategy, candidate.mode],
+                tags=[f"producer:{self.producer_id}", candidate.strategy, candidate.mode],
                 # One decision record per candidate: approve -> select_final updates
                 # the same record (final supersedes the approval) rather than adding
                 # a second taste win. Idempotent across re-approve / approve->final.
-                dedup_key=f"curation:{candidate.candidate_id}",
+                dedup_key=f"curation:{self.producer_id}:{candidate.candidate_id}",
             ),
             improvement_delta=delta,
         )

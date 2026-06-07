@@ -14,6 +14,7 @@ from contextlib import nullcontext
 import pytest
 
 from rezn_ai.conductor import BatchConductor
+from rezn_ai.generation.engine import CandidateResult
 from rezn_ai.generation.rezn_engine import ReznGeneratorEngine
 from rezn_ai.models import Batch, BatchCreateRequest, CreativeBrief
 from rezn_ai.storage.memory_store import InMemoryStore
@@ -27,6 +28,24 @@ def _conductor(tmp_path) -> BatchConductor:
 def _brief(count: int = 2) -> CreativeBrief:
     return CreativeBrief(prompt="dark melodic electronic, controlled drums",
                          key="D#", mode="minor", tempo=128.0, candidate_count=count)
+
+
+def _result(tmp_path, *, weave_call_id: str | None = None) -> CandidateResult:
+    return CandidateResult(
+        candidate_id="cand-1",
+        strategy="groove_architect",
+        seed=77,
+        key="D#",
+        mode="minor",
+        tempo=128.0,
+        technical_score=0.8,
+        arrangement={},
+        scores={},
+        reasons=["ok"],
+        arrangement_path=tmp_path / "arrangement.json",
+        audio_path=tmp_path / "preview.wav",
+        weave_call_id=weave_call_id,
+    )
 
 
 class _Rec:
@@ -84,6 +103,19 @@ def test_conversation_id_cycle_terminates(tmp_path):
     cond.store.save_batch(Batch(batch_id="y", brief=_brief(), status="ranked", parent_batch_id="x"))
     # A corrupted parent loop must terminate (cycle guard), not spin forever.
     assert cond._conversation_id("x") in {"x", "y"}
+
+
+def test_untraced_candidate_has_no_trace_url(tmp_path):
+    cond = _conductor(tmp_path)
+    candidate = cond._to_candidate(_result(tmp_path, weave_call_id=None), "b1")
+    assert candidate.trace_url is None
+
+
+def test_traced_candidate_has_call_trace_url(tmp_path):
+    cond = _conductor(tmp_path)
+    candidate = cond._to_candidate(_result(tmp_path, weave_call_id="call-123"), "b1")
+    assert candidate.trace_url is not None
+    assert candidate.trace_url.endswith("/r/call/call-123")
 
 
 # ── Each conductor action opens a session + turn ─────────────────────────────

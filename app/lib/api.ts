@@ -1,6 +1,7 @@
 // Live client for the REZN FastAPI backend (src/rezn_ai/api).
 
 import type { Candidate, CandidateStatus, ScoreDetail } from "../control-room/types";
+import type { components } from "./api-types";
 
 export const API_BASE =
   (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
@@ -52,27 +53,18 @@ export interface ApiScores {
   reasons?: string[];
 }
 
-// ── API response shapes (subset of src/rezn_ai/models.py) ───────────────────
-export interface ApiCandidate {
-  candidate_id: string;
-  batch_id: string;
-  strategy: string;
-  seed: number;
-  key: string;
-  mode: string;
-  tempo: number;
+type Schema = components["schemas"];
+type GeneratedCandidate = Schema["Candidate"];
+type GeneratedBatch = Schema["Batch"];
+type GeneratedEvent = Schema["BatchEvent"];
+type GeneratedBrief = Schema["CreativeBrief"];
+
+// ── API response shapes generated from src/rezn_ai/models.py OpenAPI ─────────
+export type ApiCandidate = Omit<GeneratedCandidate, "scores" | "status" | "reasons"> & {
   status: CandidateStatus;
-  technical_score: number;
-  scores: ApiScores & Record<string, unknown>;
-  reasons: string[];
-  audio_url: string | null;
-  arrangement_url: string | null;
-  trace_url: string | null;
-  parent_candidate_id: string | null;
-  // SoundProfile provenance: the INTERNAL prompt (not the UI starter) + profile id.
-  internal_prompt: string | null;
-  profile_id: string | null;
-}
+  scores?: ApiScores & Record<string, unknown>;
+  reasons?: string[];
+};
 
 const FALLBACK_FEATURE_META: Record<string, { label: string; weight: number }> = {
   harmonic_variety: { label: "Harmonic variety", weight: 0.18 },
@@ -125,30 +117,18 @@ function toScoreDetail(s: ApiScores | undefined, fallbackScore: number): ScoreDe
   };
 }
 
-export interface ApiEvent {
+export type ApiEvent = Omit<GeneratedEvent, "id" | "ts" | "payload"> & {
   id: string;
-  type: string;
-  message: string;
   ts: string;
   payload: Record<string, unknown>;
-}
+};
 
-export interface ApiBatch {
-  batch_id: string;
-  status: string;
-  parent_batch_id: string | null;
-  selected_final_id: string | null;
+export type ApiBatch = Omit<GeneratedBatch, "candidates" | "events"> & {
   candidates: ApiCandidate[];
   events: ApiEvent[];
-}
+};
 
-export interface BriefInput {
-  prompt: string;
-  key: string;
-  mode: "major" | "minor";
-  tempo: number;
-  candidate_count: number;
-}
+export type BriefInput = Pick<GeneratedBrief, "prompt" | "key" | "mode" | "tempo" | "candidate_count">;
 
 // ── Adapter: API candidate -> UI candidate ──────────────────────────────────
 export function toUiCandidate(c: ApiCandidate, rank: number): Candidate {
