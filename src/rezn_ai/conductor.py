@@ -8,6 +8,7 @@ replaced is gone — see docs/adr/0002-generator-over-mix-conductor.md.
 from __future__ import annotations
 
 import os
+from contextlib import ExitStack, nullcontext
 from dataclasses import replace as _dataclass_replace
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,8 @@ from .tracing.weave_client import (
     add_call_feedback,
     weave_call_url,
     weave_op,
+    weave_session,
+    weave_turn,
     weave_workspace_url,
 )
 from .models import (
@@ -48,6 +51,9 @@ from .models import (
     new_id,
     utc_now,
 )
+
+# The single agent that every conductor turn registers under in the Weave Agents view.
+_AGENT_NAME = "rezn-conductor"
 
 
 class BatchConductor:
@@ -338,10 +344,72 @@ class BatchConductor:
             status=candidate.status,
         )
 
+    # ── Weave Agents view: one Conversation per lineage, one Turn per action ────
+
+    def _conversation_id(self, batch_id: str) -> str:
+        """The lineage root of ``batch_id`` — the stable Weave conversation id that
+        groups a batch and all its refinements into one Agents Conversation.
+
+        Walks ``parent_batch_id`` to the root, guarded against cycles (a corrupted
+        parent loop) and missing batches. Never raises into the request path.
+        """
+        seen: set[str] = set()
+        current = batch_id
+        while current not in seen:
+            seen.add(current)
+            try:
+                parent = getattr(self.store.get_batch(current), "parent_batch_id", None)
+            except Exception:
+                return current  # missing batch — treat as its own root
+            if not parent:
+                return current  # no parent — this is the lineage root
+            current = parent
+        return current  # cycle — stop at the repeated id
+
+    def _agent_turn(self, *, conversation_id: str, user_message: str, session_name: str = "") -> Any:
+        """Enter the Weave Agents session+turn for one conductor action and return a
+        context manager spanning it. Pure observability: a no-op when Weave is off, and
+        it never raises into the request path — a tracing failure must not fail curation.
+        """
+        stack = ExitStack()
+        try:
+            stack.enter_context(
+                weave_session(
+                    agent_name=_AGENT_NAME,
+                    session_id=conversation_id,
+                    session_name=session_name or conversation_id,
+                )
+            )
+            stack.enter_context(weave_turn(user_message=user_message, agent_name=_AGENT_NAME))
+        except Exception:
+            stack.close()
+            return nullcontext()
+        return stack
+
+    def _agent_turn_for_candidate(self, candidate_id: str, *, user_message: str) -> Any:
+        """``_agent_turn`` keyed on a candidate's batch lineage. The candidate lookup is
+        best-effort so it can never alter the calling method's own error handling.
+        """
+        try:
+            conversation_id = self._conversation_id(self.store.get_candidate(candidate_id).batch_id)
+        except Exception:
+            conversation_id = candidate_id
+        return self._agent_turn(conversation_id=conversation_id, user_message=user_message)
+
     # ── Batch lifecycle ────────────────────────────────────────────────────────
 
     @weave_op("conductor.start_batch")
     def start_batch(self, request: BatchCreateRequest) -> Batch:
+        # A fresh batch begins a new lineage, so it is its own Agents conversation.
+        batch_id = new_id("batch")
+        with self._agent_turn(
+            conversation_id=batch_id,
+            user_message=request.brief.prompt,
+            session_name=request.brief.prompt[:60],
+        ):
+            return self._do_start_batch(request, batch_id)
+
+    def _do_start_batch(self, request: BatchCreateRequest, batch_id: str) -> Batch:
         # The prompt drives the music: interpret the whole brief into key/mode/tempo/
         # energy (W&B Inference when enabled, deterministic keyword fallback otherwise).
         # interpret_brief is Weave-traced, so the "prompt -> musical decisions" step is
@@ -351,7 +419,6 @@ class BatchConductor:
         brief = raw.model_copy(
             update={"key": interp.key, "mode": interp.mode, "tempo": interp.tempo, "energy": interp.energy}
         )
-        batch_id = new_id("batch")
         self.store.save_batch(Batch(batch_id=batch_id, brief=brief, status="running"))
         self._event(
             batch_id, "batch.started",
@@ -412,6 +479,10 @@ class BatchConductor:
 
     @weave_op("conductor.approve")
     def approve_candidate(self, candidate_id: str) -> Candidate:
+        with self._agent_turn_for_candidate(candidate_id, user_message=f"Approve candidate {candidate_id}"):
+            return self._do_approve_candidate(candidate_id)
+
+    def _do_approve_candidate(self, candidate_id: str) -> Candidate:
         candidate = self.store.get_candidate(candidate_id)
         # Idempotent + terminal: a re-approve, or a stale approve after the
         # candidate was already approved/finalized, must not record a second taste
@@ -431,6 +502,10 @@ class BatchConductor:
 
     @weave_op("conductor.reject")
     def reject_candidate(self, candidate_id: str, note: str = "") -> Candidate:
+        with self._agent_turn_for_candidate(candidate_id, user_message=f"Reject candidate {candidate_id}"):
+            return self._do_reject_candidate(candidate_id, note)
+
+    def _do_reject_candidate(self, candidate_id: str, note: str = "") -> Candidate:
         candidate = self.store.get_candidate(candidate_id)
         # 'final' is terminal — a finalized pick cannot be rejected by a stale
         # request; a re-reject (same note) is idempotent.
@@ -452,6 +527,10 @@ class BatchConductor:
 
     @weave_op("conductor.request_variant")
     def request_variant(self, candidate_id: str, note: str = "") -> Candidate:
+        with self._agent_turn_for_candidate(candidate_id, user_message=f"Request variant of {candidate_id}"):
+            return self._do_request_variant(candidate_id, note)
+
+    def _do_request_variant(self, candidate_id: str, note: str = "") -> Candidate:
         parent = self.store.get_candidate(candidate_id)
         # 'final' is terminal — a finalized pick cannot be downgraded to
         # 'variant_requested' by a stale request.
@@ -479,6 +558,13 @@ class BatchConductor:
 
     @weave_op("conductor.select_final")
     def select_final(self, batch_id: str, candidate_id: str) -> Batch:
+        with self._agent_turn(
+            conversation_id=self._conversation_id(batch_id),
+            user_message=f"Select final {candidate_id} in {batch_id}",
+        ):
+            return self._do_select_final(batch_id, candidate_id)
+
+    def _do_select_final(self, batch_id: str, candidate_id: str) -> Batch:
         batch = self.store.get_batch(batch_id)  # raises KeyError if missing
         candidate = self.store.get_candidate(candidate_id)
         if candidate.batch_id != batch_id:
@@ -552,6 +638,13 @@ class BatchConductor:
 
     @weave_op("conductor.refine_batch")
     def refine_batch(self, parent_batch_id: str, candidate_count: int | None = None) -> Batch:
+        with self._agent_turn(
+            conversation_id=self._conversation_id(parent_batch_id),
+            user_message=f"Refine batch {parent_batch_id}",
+        ):
+            return self._do_refine_batch(parent_batch_id, candidate_count)
+
+    def _do_refine_batch(self, parent_batch_id: str, candidate_count: int | None = None) -> Batch:
         """Generate a child batch that learns from the parent's feedback and songs.
 
         The reflector agent reads the previous candidates (scores + critic reasons)
