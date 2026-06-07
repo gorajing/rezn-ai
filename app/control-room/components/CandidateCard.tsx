@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Candidate, CandidateStatus } from "../types";
 import { Waveform } from "./Waveform";
 import { ScoreRing } from "./ScoreRing";
+import { ScoreBreakdown } from "./ScoreBreakdown";
 import { CheckIcon, PauseIcon, PlayIcon, StarIcon, TraceIcon, WandIcon, XIcon } from "./icons";
 
 const STATUS_PILL: Record<CandidateStatus, { label: string; cls: string }> = {
@@ -42,8 +43,10 @@ export function CandidateCard({
   onSelectFinal,
 }: CandidateCardProps) {
   const [progress, setProgress] = useState(0);
+  const [showScore, setShowScore] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const hasAudio = Boolean(candidate.audioUrl);
+  const hasDetail = Boolean(candidate.scoreDetail);
   const isFinal = candidate.status === "final";
   const isRejected = candidate.status === "rejected";
 
@@ -111,9 +114,28 @@ export function CandidateCard({
           >
             <StarIcon className="h-4 w-4" />
           </button>
-          <ScoreRing score={candidate.score} />
+          <button
+            onClick={() => hasDetail && setShowScore((s) => !s)}
+            disabled={!hasDetail}
+            aria-expanded={showScore}
+            title={hasDetail ? "How is this scored?" : undefined}
+            className={[
+              "rounded-full outline-none transition-transform",
+              hasDetail ? "cursor-pointer hover:scale-105 focus-visible:ring-2 focus-visible:ring-accent/50" : "cursor-default",
+              showScore ? "ring-2 ring-accent/50" : "",
+            ].join(" ")}
+          >
+            <ScoreRing score={candidate.score} />
+          </button>
         </div>
       </div>
+
+      {/* Inline score breakdown — real backend data, toggled by the score ring */}
+      {showScore && candidate.scoreDetail && (
+        <div className="rezn-rise">
+          <ScoreBreakdown detail={candidate.scoreDetail} />
+        </div>
+      )}
 
       {/* Meta chips */}
       <div className="flex flex-wrap gap-1.5 text-[11px] text-muted">

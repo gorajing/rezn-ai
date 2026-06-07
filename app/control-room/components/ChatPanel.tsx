@@ -1,48 +1,56 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { ChatMessage } from "../types";
-import { CheckIcon, ChevronDownIcon, SendIcon, SparkIcon } from "./icons";
+import type { AgentAction, ChatMessage, CopilotContext } from "../types";
+import { CheckIcon, ChevronDownIcon, SendIcon, SparkIcon, XIcon } from "./icons";
 
 type ChatPanelProps = {
   messages: ChatMessage[];
   busy: boolean;
+  agentActions: AgentAction[];
+  context: CopilotContext;
+  hasBatch: boolean;
   onSubmit: (prompt: string) => void;
-  onSuggestion: (text: string) => void;
+  onSuggestion: (key: string) => void;
 };
 
-// ── Showcase content: makes CopilotKit's work visible to judges ──────────────
-type ActionItem = { name: string; desc: string; dur: string; running?: boolean };
+function fmtDur(a: AgentAction): string {
+  if (a.status === "running") return `${((Date.now() - a.startedAt) / 1000).toFixed(1)}s`;
+  return `${((a.durationMs ?? 0) / 1000).toFixed(1)}s`;
+}
 
-const ACTIONS: ActionItem[] = [
-  { name: "generateVariant", desc: "Composing Indian-theme variant", dur: "2.4s", running: true },
-  { name: "rankCandidates", desc: "Scored 4 candidates via RLHF", dur: "0.8s" },
-  { name: "extractFeedback", desc: "Parsed approval signal", dur: "0.3s" },
-  { name: "embedUserIntent", desc: "Vectorized brief to latent space", dur: "0.5s" },
-  { name: "generateBatch", desc: "Synthesized 4 initial tracks", dur: "3.1s" },
+// Suggestions are keyed so the parent can map them to real actions; label is shown.
+const SUGGESTIONS: { key: string; label: string }[] = [
+  { key: "variant-top:raise energy", label: "↑ Raise energy on #1" },
+  { key: "variant-top:darker mood", label: "☾ Darker mood on #1" },
+  { key: "approve-top2", label: "✓ Approve top 2" },
+  { key: "refine", label: "⟳ Refine from feedback" },
 ];
 
-type StateRow = { k: string; v: string; accent?: boolean; mono?: boolean };
-
-const STATE_ROWS: StateRow[] = [
-  { k: "Intent", v: "Indian classical + electronic fusion", accent: true },
-  { k: "Key detected", v: "F# minor" },
-  { k: "Preferred BPM", v: "128", mono: true },
-  { k: "Top candidate", v: "Groove Architect (score 0.57)", accent: true },
-  { k: "Feedback signal", v: "Approved: energy, rhythm — Rejected: sparse texture" },
-  { k: "Iteration", v: "3 of 5", mono: true },
-  { k: "Confidence", v: "74%", accent: true, mono: true },
-];
-
-const SUGGESTIONS = ["↑ Raise energy on #1", "♪ Try tabla rhythm", "✓ Approve top 2"];
-
-export function ChatPanel({ messages, busy, onSubmit, onSuggestion }: ChatPanelProps) {
+export function ChatPanel({
+  messages,
+  busy,
+  agentActions,
+  context,
+  hasBatch,
+  onSubmit,
+  onSuggestion,
+}: ChatPanelProps) {
   const [value, setValue] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, busy]);
+
+  // Tick so running action timers count up live.
+  const [, setTick] = useState(0);
+  const anyRunning = agentActions.some((a) => a.status === "running");
+  useEffect(() => {
+    if (!anyRunning) return;
+    const id = setInterval(() => setTick((t) => t + 1), 100);
+    return () => clearInterval(id);
+  }, [anyRunning]);
 
   function submit() {
     const text = value.trim();
@@ -93,20 +101,25 @@ export function ChatPanel({ messages, busy, onSubmit, onSuggestion }: ChatPanelP
         )}
       </div>
 
-      {/* Section A — Actions running */}
-      <Section label="Actions" live>
+      {/* Section A — live CopilotKit actions */}
+      <Section label="Actions" live={anyRunning}>
         <div className="max-h-[150px] space-y-1 overflow-y-auto px-2 py-1">
-          {ACTIONS.map((a) => (
-            <ActionRow key={a.name} action={a} />
-          ))}
+          {agentActions.length === 0 ? (
+            <p className="px-2 py-3 text-[11px] leading-snug text-subtle">
+              CopilotKit actions appear here as you generate and curate. Try asking the copilot to
+              &ldquo;approve the top one.&rdquo;
+            </p>
+          ) : (
+            agentActions.map((a) => <ActionRow key={a.id} action={a} />)
+          )}
         </div>
       </Section>
 
-      {/* Section B — Copilot state */}
+      {/* Section B — live copilot context (useCopilotReadable) */}
       <Section label="Copilot State">
         <div className="px-2 py-1">
           <div className="overflow-hidden rounded-lg">
-            {STATE_ROWS.map((row, i) => (
+            {stateRows(context, hasBatch).map((row, i) => (
               <div
                 key={row.k}
                 className={`grid grid-cols-[92px_1fr] gap-2 px-2.5 py-1.5 ${
@@ -116,10 +129,11 @@ export function ChatPanel({ messages, busy, onSubmit, onSuggestion }: ChatPanelP
                 <span className="text-[10px] uppercase tracking-wide text-subtle">{row.k}</span>
                 <span
                   className={[
-                    "text-[11px] leading-snug",
+                    "truncate text-[11px] leading-snug",
                     row.accent ? "text-accent" : "text-fg",
                     row.mono ? "font-mono" : "",
                   ].join(" ")}
+                  title={row.v}
                 >
                   {row.v}
                 </span>
@@ -129,16 +143,17 @@ export function ChatPanel({ messages, busy, onSubmit, onSuggestion }: ChatPanelP
         </div>
       </Section>
 
-      {/* Section C — Suggested actions */}
+      {/* Section C — suggested actions (trigger real actions) */}
       <Section label="Suggestions">
         <div className="flex flex-wrap gap-1.5 px-3 py-2">
           {SUGGESTIONS.map((s) => (
             <button
-              key={s}
-              onClick={() => onSuggestion(s)}
-              className="rounded-[20px] border border-accent/30 bg-accent-dim px-[11px] py-[5px] text-[11px] text-accent transition-colors hover:border-accent hover:bg-accent/20"
+              key={s.key}
+              onClick={() => onSuggestion(s.key)}
+              disabled={!hasBatch}
+              className="rounded-[20px] border border-accent/30 bg-accent-dim px-[11px] py-[5px] text-[11px] text-accent transition-colors hover:border-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {s}
+              {s.label}
             </button>
           ))}
         </div>
@@ -199,8 +214,9 @@ function Section({ label, live, children }: { label: string; live?: boolean; chi
   );
 }
 
-function ActionRow({ action }: { action: ActionItem }) {
-  const { name, desc, dur, running } = action;
+function ActionRow({ action }: { action: AgentAction }) {
+  const running = action.status === "running";
+  const error = action.status === "error";
   return (
     <div className="relative flex items-start gap-2 rounded-lg py-1 pl-3 pr-1">
       {running && (
@@ -209,17 +225,49 @@ function ActionRow({ action }: { action: ActionItem }) {
       <span className="mt-0.5 grid h-3 w-3 shrink-0 place-items-center">
         {running ? (
           <span className="rezn-spin h-3 w-3 rounded-full border-2 border-accent/30 border-t-accent" />
+        ) : error ? (
+          <XIcon className="h-3 w-3 text-bad" />
         ) : (
           <CheckIcon className="h-3 w-3 text-good" />
         )}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className={`font-mono text-[12px] ${running ? "text-accent" : "text-muted"}`}>{name}</span>
-          <span className="shrink-0 font-mono text-[10px] text-subtle">{dur}</span>
+          <span className={`font-mono text-[12px] ${running ? "text-accent" : error ? "text-bad" : "text-muted"}`}>
+            {action.name}
+          </span>
+          <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-subtle">
+            {action.source === "chat" && (
+              <span className="rounded bg-accent-dim px-1 text-[9px] text-accent">chat</span>
+            )}
+            {fmtDur(action)}
+          </span>
         </div>
-        <p className="text-[11px] leading-snug text-subtle">{desc}</p>
+        <p className="text-[11px] leading-snug text-subtle">{action.desc}</p>
       </div>
     </div>
   );
+}
+
+// Build the live "what the copilot knows" rows from real context.
+function stateRows(
+  c: CopilotContext,
+  hasBatch: boolean,
+): { k: string; v: string; accent?: boolean; mono?: boolean }[] {
+  if (!hasBatch) {
+    return [
+      { k: "Intent", v: "Awaiting a brief", accent: true },
+      { k: "Status", v: "Idle — describe the music to begin" },
+    ];
+  }
+  return [
+    { k: "Intent", v: c.intent, accent: true },
+    { k: "Key", v: c.key },
+    { k: "Tempo", v: `${c.tempo} BPM`, mono: true },
+    { k: "Candidates", v: String(c.candidateCount), mono: true },
+    { k: "Top pick", v: `${c.topCandidate} (${c.topScore.toFixed(2)})`, accent: true },
+    { k: "Feedback", v: `Approved ${c.approved} · Rejected ${c.rejected}`, mono: true },
+    { k: "Iteration", v: String(c.iteration), mono: true },
+    { k: "Confidence", v: `${Math.round(c.confidence * 100)}%`, accent: true, mono: true },
+  ];
 }
