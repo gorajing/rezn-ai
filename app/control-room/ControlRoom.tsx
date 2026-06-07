@@ -17,7 +17,7 @@ import type {
   EventLevel,
   ServiceStatus,
 } from "./types";
-import { DEFAULT_BRIEF, INITIAL_EVENTS, INITIAL_MESSAGES, uid } from "./mock-data";
+import { DEFAULT_BRIEF, INITIAL_EVENTS, INITIAL_MESSAGES, uid } from "./ui-defaults";
 import { api, API_BASE, rankCandidates, type ApiBatch, type ApiEvent } from "../lib/api";
 import { TopBar } from "./components/TopBar";
 import { ChatPanel } from "./components/ChatPanel";
@@ -35,7 +35,10 @@ const DEFAULT_SERVICES: ServiceStatus[] = [
 
 const LEVEL_BY_TYPE: Record<string, EventLevel> = {
   "batch.started": "info",
-  "memory.recalled": "info",
+  "taste.recalled": "agent",
+  "taste.remembered": "info",
+  "weave.feedback": "info",
+  "reflection": "agent",
   "candidate.generated": "score",
   "batch.ranked": "success",
   "candidate.approved": "success",
@@ -43,6 +46,8 @@ const LEVEL_BY_TYPE: Record<string, EventLevel> = {
   "candidate.variant": "agent",
   "batch.final_selected": "success",
   "refine.started": "agent",
+  "refine.improved": "success",
+  "refine.plateau": "warn",
   "refine.completed": "success",
 };
 

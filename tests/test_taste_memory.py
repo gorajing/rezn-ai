@@ -63,7 +63,7 @@ def test_derive_bias_collects_suggestions_by_weight():
     assert "rejected: too busy on top end" in bias.suggestions
 
 
-def test_propose_plan_guidance_ignored_in_deterministic_mode(monkeypatch):
+def test_propose_plan_guidance_applies_deterministic_nudges_when_offline(monkeypatch):
     from rezn_ai.agents.llm_agents import propose_plan
     from rezn_ai.agents.schemas import CreativeBrief as AgentBrief
 
@@ -72,8 +72,14 @@ def test_propose_plan_guidance_ignored_in_deterministic_mode(monkeypatch):
     monkeypatch.delenv("REZN_INFERENCE_REQUIRED", raising=False)
     brief = AgentBrief(text="x", key="D#", mode="minor", tempo=128.0)
     plain = propose_plan(brief, "groove_architect")
-    guided = propose_plan(brief, "groove_architect", guidance=["make it darker"])
-    assert plain == guided  # guidance only shapes the live LLM prompt
+    guided = propose_plan(
+        brief,
+        "groove_architect",
+        guidance=["Change: too sparse, need busier groove"],
+    )
+    assert plain.source == "fallback"
+    assert guided.source == "fallback+guidance"
+    assert guided.seed_jitter > plain.seed_jitter or guided.tempo_delta != plain.tempo_delta
 
 
 def test_derive_bias_mode_not_forced_when_split():
@@ -83,6 +89,28 @@ def test_derive_bias_mode_not_forced_when_split():
     ]
     bias = derive_bias(facts, brief=_brief())
     assert bias.mode_pref is None  # 50/50 < 0.6 threshold
+
+
+def test_derive_bias_rejection_penalizes_strategy():
+    facts = [
+        TasteFact("Producer rejected a texture_builder candidate", weight=1.5,
+                  strategy="texture_builder"),
+        TasteFact("Producer approved groove_architect", weight=1.0,
+                  strategy="groove_architect"),
+    ]
+    bias = derive_bias(facts, brief=_brief())
+    assert bias.strategy_boosts["texture_builder"] < 0
+    assert bias.strategy_boosts["groove_architect"] > 0
+    assert any("avoids" in n for n in bias.notes)
+
+
+def test_plan_candidates_negative_boost_reduces_slots():
+    kw = dict(prompt="x", key="D#", mode="minor", tempo=128.0, count=5)
+    bias = PlanningBias(strategy_boosts={"texture_builder": -2.0, "groove_architect": 3.0})
+    plan = plan_candidates(**kw, bias=bias)
+    strategies = [p.strategy for p in plan]
+    assert strategies.count("texture_builder") <= 1
+    assert strategies.count("groove_architect") >= 2
 
 
 # ── plan_candidates: empty-bias is a strict no-op ────────────────────────────────
@@ -135,12 +163,15 @@ def test_local_taste_recall_from_seeded_lessons():
     assert taste.health() == {"backend": "local_lessons", "reachable": True}
 
 
-def test_local_taste_ignores_rejections():
+def test_local_taste_penalizes_rejections():
     store = InMemoryStore()
-    store.remember(MemoryLesson(body="rejected", strategy="harmony_driver",
-                                tags=["harmony_driver", "minor"]), improvement_delta=-0.25)
+    store.remember(
+        MemoryLesson(body="harmony_driver was rejected at score 0.4",
+                     strategy="harmony_driver", tags=["harmony_driver", "minor"]),
+        improvement_delta=-0.25,
+    )
     recall = LocalTasteMemory(store).recall_taste(producer_id="default", brief=_brief())
-    assert recall.bias.is_empty  # negative-delta lessons contribute no boost
+    assert recall.bias.strategy_boosts.get("harmony_driver", 0) < 0
 
 
 def test_local_remember_is_noop():
@@ -216,7 +247,7 @@ def test_agent_client_sanitizes_managed_memory_ids():
     assert memory["sessionId"] == "batch-abc-123"
 
 
-def test_agent_client_rejected_action_skips_long_term():
+def test_agent_client_rejected_action_writes_long_term():
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -225,7 +256,7 @@ def test_agent_client_rejected_action_skips_long_term():
 
     _mock_client(handler).remember_curation(
         producer_id="default", session_id="b1", action="rejected", candidate=_candidate())
-    assert f"/v1/stores/{_STORE}/long-term-memory" not in seen  # only durable actions promote
+    assert f"/v1/stores/{_STORE}/long-term-memory" in seen  # rejections are durable taste signals
 
 
 def test_agent_client_recall_maps_memories_to_bias():

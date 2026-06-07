@@ -100,10 +100,6 @@ def feedback_key(candidate_id: str) -> str:
     return f"rezn:feedback:{candidate_id}"
 
 
-def harness_weights_key() -> str:
-    return "rezn:harness:strategy_weights"
-
-
 def lessons_key() -> str:
     return "rezn:lessons:global"
 
@@ -216,10 +212,6 @@ class RedisStore:
         batch.events.append(event)
         self.save_batch(batch)
         return batch
-
-    def get_stream_events(self, batch_id: str) -> list[dict[str, Any]]:
-        entries = self._r.xrange(batch_events_key(batch_id))
-        return [{"stream_id": eid, **fields} for eid, fields in entries]
 
     # ── Candidates (Hash per candidate, Sorted Set for ranking) ──────────────
 

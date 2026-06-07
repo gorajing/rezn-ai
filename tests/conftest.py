@@ -37,10 +37,10 @@ def redis_store(fake_redis_client: fakeredis.FakeRedis) -> RedisStore:
 
 @pytest.fixture
 def fast_engine():
-    """A LocalGeneratorEngine that renders tiny previews so tests stay fast."""
-    from rezn_ai.generation.engine import LocalGeneratorEngine
+    """ReznGeneratorEngine with tiny previews so tests stay fast."""
+    from rezn_ai.generation.rezn_engine import ReznGeneratorEngine
 
-    return LocalGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
+    return ReznGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
 
 
 @pytest.fixture(params=["memory", "redis"])

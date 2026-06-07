@@ -1,14 +1,7 @@
 """Generator engine backed by the clean-room orchestrator pipeline.
 
-Implements the same :class:`GeneratorEngine` Protocol as ``LocalGeneratorEngine``,
-but renders with the richer ``render.preview_synth`` and scores with the
-discriminating ``eval.scoring.technical_score`` — the same scorer the CLI
-batch/refine loop uses, so the API and CLI agree on candidate quality.
-
-Strategy fan-out and variant lineage reuse the shared ``generation.strategies``
-helpers, so the deterministic seeds and reproducible variants the conductor relies
-on are unchanged. This is the engine the API runs by default; ``LocalGeneratorEngine``
-remains available via ``REZN_ENGINE=local``.
+Implements :class:`GeneratorEngine` using ``render.preview_synth`` and
+``eval.scoring.technical_score`` — the production path for the API and CLI.
 """
 
 from __future__ import annotations
@@ -22,6 +15,7 @@ if TYPE_CHECKING:
     from ..memory.taste import PlanningBias
 
 from ..agents.llm_agents import critique, propose_plan
+from ..agents.refinement_nudges import nudges_from_guidance
 from ..agents.schemas import CreativeBrief as AgentBrief
 from ..eval.audio_metrics import measure_wav
 from ..eval.mix_checks import evaluate_metrics
@@ -82,8 +76,47 @@ class ReznGeneratorEngine:
         # parent's own note when no explicit guidance was supplied.
         if guidance is None and getattr(parent, "feedback", None):
             guidance = [parent.feedback]
+        parent_features: dict[str, float] | None = None
+        scores = getattr(parent, "scores", None)
+        if isinstance(scores, dict):
+            raw = scores.get("features")
+            if isinstance(raw, dict):
+                parent_features = {str(k): float(v) for k, v in raw.items()}
+
+        nudges = nudges_from_guidance(guidance, parent_features=parent_features)
+        # When the reflector emitted change directives, micro-search a few seeds and
+        # keep the highest-scoring variant — bounded hill-climb within the session.
+        changing = bool(
+            guidance
+            and any(g.lower().startswith("change:") for g in guidance)
+            and nudges.has_nudges
+        )
+        if changing:
+            best: CandidateResult | None = None
+            for offset in (0, 1, 2):
+                params = variant_params(parent_params, salt + offset * 31)
+                result = self._render(
+                    batch_id,
+                    artifacts_root,
+                    params,
+                    brief,
+                    guidance,
+                    parent_features=parent_features,
+                    nudges=nudges,
+                )
+                if best is None or result.technical_score > best.technical_score:
+                    best = result
+            assert best is not None
+            return best
+
         return self._render(
-            batch_id, artifacts_root, variant_params(parent_params, salt), brief, guidance
+            batch_id,
+            artifacts_root,
+            variant_params(parent_params, salt),
+            brief,
+            guidance,
+            parent_features=parent_features,
+            nudges=nudges,
         )
 
     @weave.op()
@@ -94,6 +127,9 @@ class ReznGeneratorEngine:
         params: CandidateParams,
         brief: CreativeBrief,
         guidance: list[str] | None = None,
+        *,
+        parent_features: dict[str, float] | None = None,
+        nudges: Any | None = None,
     ) -> CandidateResult:
         candidate_id = new_id("cand")
         candidate_dir = Path(artifacts_root) / "batches" / batch_id / candidate_id
@@ -109,10 +145,14 @@ class ReznGeneratorEngine:
             tempo=brief.tempo,
             candidate_count=brief.candidate_count,
         )
-        proposal = propose_plan(agent_brief, params.strategy, guidance=guidance)
+        det_nudges = nudges or nudges_from_guidance(guidance, parent_features=parent_features)
+        proposal = propose_plan(
+            agent_brief, params.strategy, guidance=guidance, nudges=det_nudges
+        )
         seed = params.seed + proposal.seed_jitter
         tempo = max(60.0, min(200.0, params.tempo + proposal.tempo_delta))
         mode = proposal.mode or params.mode
+        energy = max(0.0, min(1.0, float(getattr(brief, "energy", 0.5)) + det_nudges.energy_delta))
 
         arrangement = compose_arrangement(
             title=f"{batch_id}:{params.strategy}",
@@ -121,7 +161,7 @@ class ReznGeneratorEngine:
             tempo=tempo,
             seed=seed,
             strategy=params.strategy,
-            energy=getattr(brief, "energy", 0.5),
+            energy=energy,
             prompt=brief.prompt,
         )
         arrangement_path = candidate_dir / "arrangement.json"
@@ -164,6 +204,13 @@ class ReznGeneratorEngine:
                     "score": critic.critic_score,
                     "reasons": list(critic.reasons),
                     "source": critic.source,
+                },
+                "refinement_nudges": {
+                    "energy_delta": det_nudges.energy_delta,
+                    "tempo_delta": det_nudges.tempo_delta,
+                    "seed_jitter": det_nudges.seed_jitter,
+                    "source": det_nudges.source,
+                    "intent": det_nudges.intent,
                 },
             },
             reasons=list(score["reasons"]),

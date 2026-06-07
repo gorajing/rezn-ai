@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from rezn_ai.conductor import BatchConductor
-from rezn_ai.generation.engine import LocalGeneratorEngine
+from rezn_ai.generation.rezn_engine import ReznGeneratorEngine
 from rezn_ai.models import BatchCreateRequest, CreativeBrief, MemoryLesson
 from rezn_ai.storage.memory_store import InMemoryStore
 
 
 def _conductor(tmp_path) -> BatchConductor:
-    engine = LocalGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
+    engine = ReznGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
     return BatchConductor(store=InMemoryStore(), engine=engine, artifacts_root=tmp_path)
 
 
@@ -106,7 +106,30 @@ def test_refine_emits_reflection_and_stamps_preference(tmp_path):
     child = cond.refine_batch(batch.batch_id)
     events = [e.type for e in cond.store.get_batch(child.batch_id).events]
     assert "reflection" in events
+    assert "taste.recalled" in events
+    assert "refine.improved" in events or "refine.plateau" in events
     assert all("preference_score" in c.scores for c in child.candidates)
+
+
+def test_refine_improves_top_score_with_feedback(tmp_path):
+    """Within-session refinement should lift the top technical score after curation."""
+    from rezn_ai.generation.rezn_engine import ReznGeneratorEngine
+
+    engine = ReznGeneratorEngine(preview_seconds=0.4, sample_rate=8000)
+    cond = BatchConductor(store=InMemoryStore(), engine=engine, artifacts_root=tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(5)))
+    parent_top = max(c.technical_score for c in batch.candidates)
+    ranked = sorted(batch.candidates, key=lambda c: c.technical_score, reverse=True)
+    cond.approve_candidate(ranked[0].candidate_id)
+    cond.approve_candidate(ranked[1].candidate_id)
+    for c in ranked[-2:]:
+        cond.reject_candidate(c.candidate_id, note="too sparse, need busier groove")
+    child = cond.refine_batch(batch.batch_id)
+    child_top = max(c.technical_score for c in child.candidates)
+    assert child_top >= parent_top  # self-improvement: never regress the ceiling
+    improved = [e for e in child.events if e.type == "refine.improved"]
+    assert improved
+    assert improved[0].payload.get("delta_top", 0) >= 0
 
 
 # ── API surface (runs against InMemoryStore and fakeredis via the client fixture) ──
@@ -114,7 +137,7 @@ def test_refine_emits_reflection_and_stamps_preference(tmp_path):
 def test_taste_profile_endpoint(client):
     body = client.get("/api/taste").json()
     assert body["backend"]["backend"] == "local_lessons"
-    assert "memories" in body
+    assert "facts" in body and "lessons" in body
 
 
 def test_taste_recall_endpoint(client):

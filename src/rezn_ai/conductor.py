@@ -19,7 +19,7 @@ from .config import agent_memory_required
 from .eval.preference import composite_score, taste_alignment
 from .generation.engine import CandidateResult, GeneratorEngine
 from .memory.local import LocalTasteMemory
-from .memory.taste import TasteMemory
+from .memory.taste import TasteFact, TasteMemory, TasteRecall, derive_bias
 from .tracing.weave_client import (
     add_call_feedback,
     current_call_id,
@@ -63,6 +63,47 @@ class BatchConductor:
             self._event(candidate.batch_id, "weave.feedback",
                         f"Attached {reaction or 'note'} to the generation trace.",
                         {"candidate_id": candidate.candidate_id, "reaction": reaction})
+
+    def _session_taste_facts(self, candidates: list[Candidate]) -> list[TasteFact]:
+        """Immediate within-session taste from curation on the parent batch.
+
+        Agent Memory long-term indexing may lag; this ensures ``refine_batch`` applies
+        the producer's fresh approvals/rejections before the next generation pass.
+        """
+        facts: list[TasteFact] = []
+        for c in candidates:
+            if c.status not in ("approved", "final", "rejected"):
+                continue
+            action = "final" if c.status == "final" else c.status
+            weight = 2.5 if action in ("approved", "final") else 1.8
+            text = (
+                f"Producer {action} a {c.strategy} candidate in {c.key} {c.mode} "
+                f"at {c.tempo:g} bpm (score {c.technical_score})."
+            )
+            if c.feedback:
+                text += f" Note: {c.feedback}"
+            facts.append(
+                TasteFact(
+                    text=text,
+                    weight=weight,
+                    strategy=c.strategy,
+                    mode=c.mode if c.mode in ("minor", "major") else None,
+                    tempo=c.tempo,
+                    source="session_curation",
+                )
+            )
+        return facts
+
+    def _merge_taste_recall(
+        self, *, brief: Any, session_candidates: list[Candidate]
+    ) -> TasteRecall:
+        """Cross-session recall + immediate parent-batch curation."""
+        recall = self.taste.recall_taste(producer_id=self.producer_id, brief=brief)
+        session_facts = self._session_taste_facts(session_candidates)
+        seen = {f.text for f in session_facts}
+        merged = session_facts + [f for f in recall.facts if f.text not in seen]
+        bias = derive_bias(merged, brief=brief)
+        return TasteRecall(facts=merged, bias=bias)
 
     def _record_taste(self, candidate: Candidate, action: str, note: str = "") -> None:
         """Append a curation decision to the producer's taste profile (best-effort)."""
@@ -349,9 +390,18 @@ class BatchConductor:
 
         # Reflector: turn prior songs + feedback into next-batch directives.
         reflection = self._reflect(parent_candidates, parent.brief.prompt)
-        # Cross-session taste, so refinement also reflects what the producer liked before.
-        recall = self.taste.recall_taste(producer_id=self.producer_id, brief=parent.brief)
+        # Cross-session taste + immediate parent-batch curation (within-session learning).
+        recall = self._merge_taste_recall(brief=parent.brief, session_candidates=parent_candidates)
         guidance = list(reflection.as_guidance()) + list(recall.bias.suggestions)
+
+        parent_top = max(c.technical_score for c in parent_candidates)
+        approved_scores = [
+            c.technical_score for c in parent_candidates if c.status in ("approved", "final")
+        ]
+        parent_approved_top = max(approved_scores) if approved_scores else parent_top
+        parent_mean = round(
+            sum(c.technical_score for c in parent_candidates) / len(parent_candidates), 4
+        )
 
         child_id = new_id("batch")
         self.store.save_batch(
@@ -370,9 +420,28 @@ class BatchConductor:
         self._event(
             child_id, "reflection",
             f"Reflection ({reflection.source}): {reflection.intent}",
-            {"keep": list(reflection.keep), "change": list(reflection.change),
-             "source": reflection.source, "guidance": guidance},
+            {
+                "keep": list(reflection.keep),
+                "change": list(reflection.change),
+                "source": reflection.source,
+                "guidance": guidance,
+                "session_facts": len(self._session_taste_facts(parent_candidates)),
+                "strategy_boosts": recall.bias.strategy_boosts,
+            },
         )
+        if recall.facts:
+            self._event(
+                child_id,
+                "taste.recalled",
+                f"Recalled {len(recall.facts)} taste signal(s) for refinement "
+                f"({', '.join(recall.bias.notes) if recall.bias.notes else 'guidance only'}).",
+                {
+                    "facts": len(recall.facts),
+                    "notes": recall.bias.notes,
+                    "strategy_boosts": recall.bias.strategy_boosts,
+                    "sources": recall.bias.sources,
+                },
+            )
 
         call_id = current_call_id()
         call_url = weave_call_url(call_id)
@@ -397,7 +466,31 @@ class BatchConductor:
         batch = self.store.get_batch(child_id)
         batch.status = "ranked"
         self.store.save_batch(batch)
-        top = batch.candidates[0].technical_score if batch.candidates else 0.0
+        child_scores = [c.technical_score for c in batch.candidates]
+        top = child_scores[0] if child_scores else 0.0
+        child_mean = round(sum(child_scores) / len(child_scores), 4) if child_scores else 0.0
+        delta_top = round(top - parent_top, 4)
+        delta_approved = round(top - parent_approved_top, 4)
+        delta_mean = round(child_mean - parent_mean, 4)
+        improved = delta_top > 0 or delta_approved > 0
+        self._event(
+            child_id,
+            "refine.improved" if improved else "refine.plateau",
+            (f"Top score {top:.3f} ({delta_top:+.3f} vs parent, {delta_approved:+.3f} vs approved baseline). "
+             f"Mean {child_mean:.3f} ({delta_mean:+.3f})."),
+            {
+                "parent_batch_id": parent_batch_id,
+                "parent_top": parent_top,
+                "parent_approved_top": parent_approved_top,
+                "parent_mean": parent_mean,
+                "child_top": top,
+                "child_mean": child_mean,
+                "delta_top": delta_top,
+                "delta_approved_top": delta_approved,
+                "delta_mean": delta_mean,
+                "improved": improved,
+            },
+        )
         self._event(
             child_id, "refine.completed",
             f"Refined batch ranked {len(batch.candidates)} candidates (top score {top}).",

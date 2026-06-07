@@ -106,7 +106,8 @@ def _allocate_slots(strategy_boosts: dict[str, float], count: int) -> list[str]:
     favoured strategies get proportionally more slots. Fully deterministic
     (ties broken by strategy name), so a given (boosts, count) is reproducible.
     """
-    weights = {s: 1.0 + max(0.0, strategy_boosts.get(s, 0.0)) for s in STRATEGIES}
+    # Negative boosts penalize a strategy (floor keeps every strategy reachable).
+    weights = {s: max(0.05, 1.0 + strategy_boosts.get(s, 0.0)) for s in STRATEGIES}
     total = sum(weights.values())
     raw = {s: weights[s] / total * count for s in STRATEGIES}
     counts = {s: int(raw[s]) for s in STRATEGIES}

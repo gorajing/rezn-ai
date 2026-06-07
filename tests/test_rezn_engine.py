@@ -1,8 +1,4 @@
-"""The clean-room engine behind the API: ranked candidates, lineage, determinism.
-
-The API tests inject LocalGeneratorEngine, so these cover ReznGeneratorEngine
-(our synth + discriminating scorer) through the real BatchConductor path.
-"""
+"""The clean-room engine behind the API: ranked candidates, lineage, determinism."""
 
 from __future__ import annotations
 

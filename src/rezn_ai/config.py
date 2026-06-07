@@ -50,8 +50,6 @@ def validate_deployment() -> None:
     errors: list[str] = []
 
     if production_mode():
-        if os.getenv("REZN_ENGINE", "rezn").strip().lower() == "local":
-            errors.append("REZN_ENGINE=local is not allowed when REZN_PRODUCTION=true (use rezn)")
         from .agents.llm_agents import inference_enabled
 
         if not inference_enabled():

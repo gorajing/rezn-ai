@@ -31,7 +31,8 @@ _MODES = ("minor", "major")
 _BPM = re.compile(r"(\d{2,3})\s*bpm", re.IGNORECASE)
 _SAFE_ID = re.compile(r"[^A-Za-z0-9-]+")
 # Actions worth promoting straight to durable long-term memory.
-_DURABLE_ACTIONS = frozenset({"approved", "final"})
+# Rejections carry high-signal negative taste (especially with producer notes).
+_DURABLE_ACTIONS = frozenset({"approved", "final", "rejected"})
 
 
 class AgentMemoryClient:

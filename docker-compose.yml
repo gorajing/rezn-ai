@@ -27,7 +27,6 @@ services:
       REDIS_URL: redis://redis:6379/0
       REDIS_REQUIRED: "true"
       REZN_PRODUCTION: "true"
-      REZN_ENGINE: rezn
       REZN_ENABLE_INFERENCE: "1"
       REZN_INFERENCE_REQUIRED: "true"
       AGENT_MEMORY_REQUIRED: "true"

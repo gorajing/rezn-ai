@@ -1,7 +1,4 @@
-// Live client for the REZN backend (src/rezn_ai/api). Replaces the mock-data
-// layer in app/control-room with real calls to the FastAPI service.
-//
-// Set NEXT_PUBLIC_API_URL to point at the API (defaults to local uvicorn).
+// Live client for the REZN FastAPI backend (src/rezn_ai/api).
 
 import type { Candidate, CandidateStatus, ScoreDetail } from "../control-room/types";
 

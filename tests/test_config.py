@@ -38,16 +38,7 @@ def test_required_flags_follow_production(monkeypatch):
 def test_validate_deployment_skipped_under_disable_redis(monkeypatch):
     monkeypatch.setenv("REZN_DISABLE_REDIS", "1")
     monkeypatch.setenv("REZN_PRODUCTION", "true")
-    monkeypatch.setenv("REZN_ENGINE", "local")
     validate_deployment()  # must not raise in hermetic test mode
-
-
-def test_validate_deployment_blocks_local_engine(monkeypatch):
-    monkeypatch.delenv("REZN_DISABLE_REDIS", raising=False)
-    monkeypatch.setenv("REZN_PRODUCTION", "true")
-    monkeypatch.setenv("REZN_ENGINE", "local")
-    with pytest.raises(RuntimeError, match="REZN_ENGINE=local"):
-        validate_deployment()
 
 
 def test_is_truthy():

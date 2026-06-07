@@ -57,14 +57,17 @@ class LocalTasteMemory:
         brief_tokens = _tokens(brief.prompt)
         scored: list[tuple[float, str, TasteFact]] = []
         for lesson in lessons:
-            improvement = max(0.0, float(getattr(lesson, "improvement_delta", 0.0)))
-            if improvement <= 0:
-                continue  # only learn from what demonstrably worked
+            delta = float(getattr(lesson, "improvement_delta", 0.0))
+            if delta == 0:
+                continue
             body = getattr(lesson, "body", "") or ""
             tags = list(getattr(lesson, "tags", []) or [])
             overlap = brief_tokens & _tokens(body + " " + " ".join(tags))
             relevance = 1.0 + 0.5 * len(overlap)
-            weight = round(improvement * relevance, 4)
+            # Approvals contribute positive weight; rejections contribute negative.
+            weight = round(abs(delta) * relevance * (1.0 if delta > 0 else -1.0), 4)
+            if weight == 0:
+                continue
             mode = next((t for t in tags if t in _MODES), None)
             fact = TasteFact(
                 text=body,
