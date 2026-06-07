@@ -101,8 +101,12 @@ class TasteMemory(Protocol):
         action: str,
         candidate: "Candidate",
         note: str = "",
-    ) -> None:
-        """Record one curation decision into the producer's taste profile."""
+    ) -> bool:
+        """Record one curation decision into the producer's taste profile.
+
+        Best-effort: returns True if the decision persisted, False otherwise, and
+        must NEVER raise into the request path.
+        """
 
     def recall_taste(
         self, *, producer_id: str, brief: CreativeBrief, limit: int = 5

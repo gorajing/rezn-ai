@@ -7,6 +7,7 @@ replaced is gone — see docs/adr/0002-generator-over-mix-conductor.md.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import replace as _dataclass_replace
 from pathlib import Path
@@ -48,6 +49,8 @@ from .models import (
     new_id,
     utc_now,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BatchConductor:
@@ -255,22 +258,39 @@ class BatchConductor:
         return deltas
 
     def _record_taste(self, candidate: Candidate, action: str, note: str = "") -> None:
-        """Append a curation decision to the producer's taste profile (best-effort)."""
+        """Record a curation decision into the producer's taste profile.
+
+        Best-effort by contract — a ``TasteMemory`` backend must never raise into the
+        request path. The candidate is already persisted (canonical state), so a
+        taste-memory hiccup must never fail the user's action: a write that does not
+        persist surfaces as a loud ``taste.write_failed`` event (visible in the batch
+        timeline / Weave / UI), never as a 500. Whether a *misconfigured* backend
+        blocks the deploy is decided once, at startup, by ``build_taste_memory``.
+        """
         try:
-            self.taste.remember_curation(
+            persisted = self.taste.remember_curation(
                 producer_id=self.producer_id,
                 session_id=candidate.batch_id,
                 action=action,
                 candidate=candidate,
                 note=note,
             )
+        except Exception as exc:  # defense in depth — the contract says never raise
+            logger.warning("Taste memory write raised for %s: %s", candidate.candidate_id, exc)
+            persisted = False
+
+        if persisted:
             self._event(candidate.batch_id, "taste.remembered",
                         f"Recorded {action} of {candidate.strategy} into taste memory.",
                         {"candidate_id": candidate.candidate_id, "action": action,
                          "backend": self.taste.health().get("backend")})
-        except Exception as exc:
-            if agent_memory_required():
-                raise RuntimeError(f"Taste memory write failed: {exc}") from exc
+        else:
+            logger.warning("Taste memory write for %s did not persist (action=%s)",
+                           candidate.candidate_id, action)
+            self._event(candidate.batch_id, "taste.write_failed",
+                        f"Taste memory write for {action} of {candidate.strategy} did not "
+                        "persist; the candidate is saved and taste will catch up.",
+                        {"candidate_id": candidate.candidate_id, "action": action})
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 

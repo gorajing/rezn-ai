@@ -234,6 +234,12 @@ def test_agent_client_health_unreachable_on_401():
     assert _mock_client(lambda r: httpx.Response(401, json={})).health()["reachable"] is False
 
 
+def test_agent_client_health_unreachable_on_404():
+    """A 404 means the store/endpoint is wrong — the service is NOT usable, so the
+    startup health check must fail fast rather than treat it as healthy (Codex #2)."""
+    assert _mock_client(lambda r: httpx.Response(404, json={})).health()["reachable"] is False
+
+
 def test_agent_client_remember_writes_session_event_and_long_term():
     seen: list[str] = []
 
@@ -276,6 +282,19 @@ def test_agent_client_rejected_action_writes_long_term():
     _mock_client(handler).remember_curation(
         producer_id="default", session_id="b1", action="rejected", candidate=_candidate())
     assert f"/v1/stores/{_STORE}/long-term-memory" in seen  # rejections are durable taste signals
+
+
+def test_agent_client_remember_returns_true_on_success():
+    assert _mock_client(lambda r: httpx.Response(200, json={})).remember_curation(
+        producer_id="default", session_id="b1", action="approved", candidate=_candidate()) is True
+
+
+def test_agent_client_remember_returns_false_and_never_raises_on_write_error():
+    """TasteMemory contract (2A): a failed write logs and returns False — it must
+    never raise into the request path, despite the method's prior name."""
+    client = _mock_client(lambda r: httpx.Response(500, json={"error": "boom"}))
+    assert client.remember_curation(
+        producer_id="default", session_id="b1", action="approved", candidate=_candidate()) is False
 
 
 def test_agent_client_recall_maps_memories_to_bias():
