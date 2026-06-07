@@ -252,6 +252,11 @@ class BatchConductor:
     @weave_op("conductor.approve")
     def approve_candidate(self, candidate_id: str) -> Candidate:
         candidate = self.store.get_candidate(candidate_id)
+        # Idempotent + terminal: a re-approve, or a stale approve after the
+        # candidate was already approved/finalized, must not record a second taste
+        # win nor downgrade a 'final' pick back to 'approved'.
+        if candidate.status in ("approved", "final"):
+            return candidate
         candidate.status = "approved"
         self.store.save_candidate(candidate)
         self.store.save_feedback(candidate_id, {"decision": "approved"})
@@ -265,6 +270,12 @@ class BatchConductor:
     @weave_op("conductor.reject")
     def reject_candidate(self, candidate_id: str, note: str = "") -> Candidate:
         candidate = self.store.get_candidate(candidate_id)
+        # 'final' is terminal — a finalized pick cannot be rejected by a stale
+        # request; a re-reject (same note) is idempotent.
+        if candidate.status == "final":
+            return candidate
+        if candidate.status == "rejected" and (candidate.feedback or "") == (note or ""):
+            return candidate
         candidate.status = "rejected"
         candidate.feedback = note or None
         self.store.save_candidate(candidate)
@@ -300,13 +311,20 @@ class BatchConductor:
     def select_final(self, batch_id: str, candidate_id: str) -> Batch:
         batch = self.store.get_batch(batch_id)  # raises KeyError if missing
         candidate = self.store.get_candidate(candidate_id)
+        already_counted = candidate.status in ("approved", "final")
         candidate.status = "final"
         self.store.save_candidate(candidate)
         batch.selected_final_id = candidate_id
         batch.status = "completed"
         self.store.save_batch(batch)
+        # The lesson upserts on the candidate's dedup_key, so final supersedes the
+        # approval as a single decision record.
         self._remember(candidate, approved=True, final=True)
-        self._record_taste(candidate, "final")
+        # Only write a taste-backend curation if the candidate wasn't already
+        # counted on approval — otherwise the append-only production backend
+        # (Agent Memory) records the same win twice for the approve -> final upgrade.
+        if not already_counted:
+            self._record_taste(candidate, "final")
         self._record_feedback(candidate, reaction="🎯", note=f"selected as final ({candidate.strategy})")
         self._event(batch_id, "batch.final_selected",
                     f"Selected final candidate ({candidate.strategy}).", {"candidate_id": candidate_id})

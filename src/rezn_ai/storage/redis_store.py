@@ -254,13 +254,23 @@ class RedisStore:
     def remember(self, lesson: MemoryLesson, improvement_delta: float = 0.0) -> MemoryLesson:
         lesson.improvement_delta = improvement_delta
         member = lesson.model_dump_json()
-        if lesson.dedup_key is not None:
-            # Supersede any prior member with the same key (single decision record).
-            prior = self._r.hget(lessons_dedup_key(), lesson.dedup_key)
+        if lesson.dedup_key is None:
+            self._r.zadd(lessons_key(), {member: improvement_delta})
+            return lesson
+
+        # Supersede any prior member with the same key — atomically, so concurrent
+        # curation for the same dedup_key cannot interleave hget/zrem/zadd and leave
+        # two JSON members in the sorted set. WATCH the dedup hash; the read +
+        # zrem/hset/zadd run in one MULTI/EXEC (redis-py retries on WatchError).
+        def _txn(pipe: Any) -> None:
+            prior = pipe.hget(lessons_dedup_key(), lesson.dedup_key)
+            pipe.multi()
             if prior:
-                self._r.zrem(lessons_key(), prior)
-            self._r.hset(lessons_dedup_key(), lesson.dedup_key, member)
-        self._r.zadd(lessons_key(), {member: improvement_delta})
+                pipe.zrem(lessons_key(), prior)
+            pipe.hset(lessons_dedup_key(), lesson.dedup_key, member)
+            pipe.zadd(lessons_key(), {member: improvement_delta})
+
+        self._r.transaction(_txn, lessons_dedup_key())
         return lesson
 
     def recall_top_lessons(self, limit: int = 5) -> list[MemoryLesson]:

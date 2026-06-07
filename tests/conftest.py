@@ -17,7 +17,12 @@ os.environ.setdefault("AGENT_MEMORY_REQUIRED", "0")
 os.environ.setdefault("REZN_INFERENCE_REQUIRED", "0")
 os.environ["WANDB_API_KEY"] = ""              # -> initialize_weave() no-ops, never hits wandb.ai
 os.environ["WANDB_INFERENCE_API_KEY"] = ""    # -> no live W&B Inference calls
-os.environ.pop("WEAVE_PROJECT", None)         # drop any custom project; code default applies
+# Force the canonical default project. Popping is not enough: default_project_name()
+# calls load_project_env(), which would reload a custom WEAVE_PROJECT from .env when
+# the key is merely absent. Assigning the default overrides any .env/shell value.
+from rezn_ai.tracing.weave_client import DEFAULT_WEAVE_PROJECT  # noqa: E402
+
+os.environ["WEAVE_PROJECT"] = DEFAULT_WEAVE_PROJECT
 os.environ.setdefault("OPENAI_API_KEY", "")
 os.environ.setdefault("REZN_ENABLE_INFERENCE", "0")  # deterministic agents, no live LLM calls
 os.environ["WANDB_MODE"] = "disabled"         # belt-and-suspenders: keep wandb fully offline

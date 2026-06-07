@@ -80,6 +80,59 @@ def test_reapprove_does_not_double_count(tmp_path):
     assert len(wins) == 1
 
 
+def test_final_is_terminal_a_late_approve_does_not_downgrade(tmp_path):
+    """'final' is terminal: a stale/retry approve after select_final must not
+    downgrade the candidate back to 'approved' nor overwrite the final lesson with
+    the lower approval delta (Codex finding on Phase-0 #4)."""
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cand = batch.candidates[0]
+    cond.approve_candidate(cand.candidate_id)
+    cond.select_final(batch.batch_id, cand.candidate_id)
+    cond.approve_candidate(cand.candidate_id)  # stale retry after final
+    got = cond.store.get_candidate(cand.candidate_id)
+    assert got.status == "final"  # not downgraded
+    wins = [lsn for lsn in cond.store.list_memories() if lsn.improvement_delta > 0]
+    assert len(wins) == 1
+    assert wins[0].improvement_delta == cand.technical_score + 0.5  # final delta preserved
+
+
+class _SpyTaste:
+    """Minimal TasteMemory that records remember_curation calls (backend-agnostic
+    idempotency probe — the local backend's remember_curation is a no-op)."""
+
+    def __init__(self, store):
+        self.store = store
+        self.curations: list[tuple[str, str]] = []  # (action, candidate_id)
+
+    def recall_taste(self, *, producer_id, brief, limit=5):
+        from rezn_ai.memory.taste import TasteRecall, derive_bias
+
+        return TasteRecall(facts=[], bias=derive_bias([], brief=brief))
+
+    def remember_curation(self, *, producer_id, session_id, action, candidate, note=""):
+        self.curations.append((action, candidate.candidate_id))
+
+    def health(self):
+        return {"backend": "spy", "reachable": True}
+
+
+def test_approve_then_final_records_one_curation_per_candidate(tmp_path):
+    """Backend-agnostic: approve -> select_final must record a single curation for
+    the candidate, not an 'approved' AND a 'final' write (Codex finding #1 — the
+    production Agent Memory backend otherwise double-counts the upgrade)."""
+    engine = ReznGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
+    store = InMemoryStore()
+    spy = _SpyTaste(store)
+    cond = BatchConductor(store=store, engine=engine, artifacts_root=tmp_path, taste=spy)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cid = batch.candidates[0].candidate_id
+    cond.approve_candidate(cid)
+    cond.select_final(batch.batch_id, cid)
+    for_cand = [c for c in spy.curations if c[1] == cid]
+    assert len(for_cand) == 1
+
+
 def test_approve_is_safe_without_weave(tmp_path):
     # Weave tracing is off in tests; feedback must degrade silently, not crash.
     cond = _conductor(tmp_path)
