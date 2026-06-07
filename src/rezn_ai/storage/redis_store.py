@@ -30,6 +30,22 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 
+# ── Lifecycle policy ────────────────────────────────────────────────────────────
+# Ephemeral run-state (batches, candidates, event stream, feedback, once-per-parent
+# markers) carries a sliding TTL so the free tier can't fill up. The learned policy
+# (taste vector, prompt arms, profiles, decisions, lessons) is the memory and never
+# expires. Streams are also hard-capped so one batch's log can't grow unbounded.
+_DEFAULT_STATE_TTL_SECONDS = 604800  # 7 days; 0 disables expiry (original behavior)
+_DEFAULT_EVENT_STREAM_MAXLEN = 1000  # per-batch event log
+_DEFAULT_DECISIONS_STREAM_MAXLEN = 10000  # durable decisions audit log
+
+
+def _state_ttl_from_env() -> int:
+    try:
+        return int(os.getenv("REZN_STATE_TTL_SECONDS", str(_DEFAULT_STATE_TTL_SECONDS)))
+    except ValueError:
+        return _DEFAULT_STATE_TTL_SECONDS
+
 
 def _is_truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -199,7 +215,15 @@ class RedisStore:
     ``_client`` (used by the tests with fakeredis).
     """
 
-    def __init__(self, redis_url: str = DEFAULT_REDIS_URL, _client: Any = None) -> None:
+    def __init__(
+        self,
+        redis_url: str = DEFAULT_REDIS_URL,
+        _client: Any = None,
+        *,
+        state_ttl_seconds: int | None = None,
+        event_stream_maxlen: int | None = None,
+        decisions_stream_maxlen: int | None = None,
+    ) -> None:
         if _client is not None:
             self._r = _client
         else:
@@ -212,6 +236,25 @@ class RedisStore:
                 retry_on_timeout=True,
                 health_check_interval=30,
             )
+        self._state_ttl = (
+            _state_ttl_from_env() if state_ttl_seconds is None else int(state_ttl_seconds)
+        )
+        self._event_stream_maxlen = (
+            _DEFAULT_EVENT_STREAM_MAXLEN if event_stream_maxlen is None else int(event_stream_maxlen)
+        )
+        self._decisions_stream_maxlen = (
+            _DEFAULT_DECISIONS_STREAM_MAXLEN
+            if decisions_stream_maxlen is None
+            else int(decisions_stream_maxlen)
+        )
+
+    def _expire(self, *keys: str) -> None:
+        """Apply the sliding run-state TTL to ephemeral keys. No-op when the TTL is
+        disabled (``REZN_STATE_TTL_SECONDS=0``), preserving never-expire behavior."""
+        if self._state_ttl <= 0:
+            return
+        for key in keys:
+            self._r.expire(key, self._state_ttl)
 
     # ── Batches (JSON per batch) ─────────────────────────────────────────────
 
@@ -219,6 +262,7 @@ class RedisStore:
         # `candidates` is a read-time projection and `events` live in the per-batch
         # stream (the source of truth); never persist either on the batch record.
         self._r.set(batch_key(batch.batch_id), batch.model_dump_json(exclude={"candidates", "events"}))
+        self._expire(batch_key(batch.batch_id))
         return batch
 
     def _load_batch(self, batch_id: str) -> Batch:
@@ -237,13 +281,15 @@ class RedisStore:
     # ── Events (Redis Stream per batch) ──────────────────────────────────────
 
     def append_event(self, batch_id: str, event: BatchEvent) -> Batch:
-        self._r.xadd(batch_events_key(batch_id), {
+        key = batch_events_key(batch_id)
+        self._r.xadd(key, {
             "id": event.id,
             "type": event.type,
             "message": event.message,
             "ts": event.ts,
             "payload": json.dumps(event.payload),
-        })
+        }, maxlen=self._event_stream_maxlen, approximate=False)
+        self._expire(key)
         return self.get_batch(batch_id)
 
     def _read_events(self, batch_id: str) -> list[BatchEvent]:
@@ -265,6 +311,7 @@ class RedisStore:
         self._r.hset(candidate_key(candidate.candidate_id), mapping=_candidate_to_mapping(candidate))
         # Sorted set = ranking by technical_score (best first via ZREVRANGE).
         self._r.zadd(batch_candidates_key(candidate.batch_id), {candidate.candidate_id: candidate.technical_score})
+        self._expire(candidate_key(candidate.candidate_id), batch_candidates_key(candidate.batch_id))
         return candidate
 
     def get_candidate(self, candidate_id: str) -> Candidate:
@@ -285,6 +332,7 @@ class RedisStore:
 
     def save_feedback(self, candidate_id: str, payload: dict[str, Any]) -> None:
         self._r.set(feedback_key(candidate_id), json.dumps(payload))
+        self._expire(feedback_key(candidate_id))
 
     # ── Refinement memory (Sorted Set by improvement_delta) ──────────────────
 
@@ -365,12 +413,23 @@ class RedisStore:
     def claim_once(self, key: str) -> bool:
         """Atomically claim ``key`` exactly once. Returns True for the first caller,
         False thereafter — SET NX is atomic, so concurrent callers cannot both claim.
+
+        The marker carries the run-state TTL (when enabled) so once-per-parent
+        markers can't accumulate forever; the window vastly outlives any active
+        refinement. This is a permanent idempotency marker, not a held lock.
         """
-        return bool(self._r.set(key, "1", nx=True))
+        ex = self._state_ttl if self._state_ttl > 0 else None
+        return bool(self._r.set(key, "1", nx=True, ex=ex))
 
     def append_decision(self, producer_id: str, decision: dict[str, Any]) -> None:
-        """Append a policy-update / curation decision to the producer's stream."""
-        self._r.xadd(taste_decisions_key(producer_id), {"data": json.dumps(decision)})
+        """Append a policy-update / curation decision to the producer's stream.
+
+        Durable (never expires) but hard-capped so the audit log stays bounded.
+        """
+        self._r.xadd(
+            taste_decisions_key(producer_id), {"data": json.dumps(decision)},
+            maxlen=self._decisions_stream_maxlen, approximate=False,
+        )
 
     def read_decisions(self, producer_id: str, count: int = 50) -> list[dict[str, Any]]:
         """The most recent ``count`` decisions (oldest-first within the window)."""
