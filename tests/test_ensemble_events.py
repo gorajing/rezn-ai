@@ -29,7 +29,10 @@ def test_batch_surfaces_every_ensemble_agent(client):
     }
     assert len(agent_ids) >= 8
 
-    # every agent.step event carries a role for the Agent Room to group on
+    # every agent-tagged event — the agent.step events AND the composer-tagged
+    # candidate.generated events — carries a role, because the Agent Room groups and
+    # styles lanes on payload.agent_id/role regardless of the event type.
     for e in batch["events"]:
-        if e["type"] == "agent.step":
-            assert e["payload"].get("role")
+        payload = e.get("payload") or {}
+        if payload.get("agent_id"):
+            assert payload.get("role"), e
