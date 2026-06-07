@@ -1,0 +1,28 @@
+# Uses the hermetic `client` fixture from conftest.py (parametrized over
+# InMemoryStore + fakeredis; Weave/inference disabled).
+
+
+def test_batch_surfaces_every_ensemble_agent(client):
+    resp = client.post(
+        "/api/batches",
+        json={"brief": {"prompt": "dark warehouse techno", "candidate_count": 3}},
+    )
+    assert resp.status_code == 200, resp.text
+    batch = resp.json()
+
+    agent_ids = {
+        e["payload"]["agent_id"]
+        for e in batch["events"]
+        if isinstance(e.get("payload"), dict) and e["payload"].get("agent_id")
+    }
+    # 1 orchestrator + 3 composers + 3 critics + 1 judge = 8 distinct agents
+    assert "orchestrator" in agent_ids
+    assert "judge" in agent_ids
+    assert {"critic:groove", "critic:harmony", "critic:mix"} <= agent_ids
+    assert sum(1 for a in agent_ids if a.startswith("composer:")) >= 3
+    assert len(agent_ids) >= 8
+
+    # every agent.step event carries a role for the Agent Room to group on
+    for e in batch["events"]:
+        if e["type"] == "agent.step":
+            assert e["payload"].get("role")
