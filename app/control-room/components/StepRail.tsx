@@ -14,31 +14,29 @@ export function StepRail({ active }: { active: number }) {
           <div key={label} className="flex items-center gap-1.5">
             <div
               className={[
-                "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium",
                 isActive
-                  ? "border-violet-400/40 bg-violet-500/15 text-violet-100"
+                  ? "border-accent/40 bg-accent-dim text-accent"
                   : isDone
-                    ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200/90"
-                    : "border-white/10 bg-white/[0.02] text-zinc-500",
+                    ? "border-good/30 bg-good/10 text-good"
+                    : "border-line-2 bg-surface-2 text-subtle",
               ].join(" ")}
             >
               <span
                 className={[
                   "grid h-4 w-4 place-items-center rounded-full text-[10px] font-semibold",
                   isActive
-                    ? "bg-violet-400 text-violet-950"
+                    ? "bg-accent text-bg"
                     : isDone
-                      ? "bg-emerald-400 text-emerald-950"
-                      : "bg-white/10 text-zinc-400",
+                      ? "bg-good text-bg"
+                      : "bg-surface-3 text-subtle",
                 ].join(" ")}
               >
                 {isDone ? "✓" : step}
               </span>
               {label}
             </div>
-            {step < STEPS.length && (
-              <span className="h-px w-4 bg-white/10" aria-hidden />
-            )}
+            {step < STEPS.length && <span className="h-px w-4 bg-line-2" aria-hidden />}
           </div>
         );
       })}

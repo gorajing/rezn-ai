@@ -1,10 +1,11 @@
 import type { ServiceState } from "../types";
 
+// Theme-aware status colors (resolve through CSS variables).
 const COLORS: Record<ServiceState, string> = {
-  ok: "#34d399",
-  live: "#22d3ee",
-  warn: "#fbbf24",
-  off: "#71717a",
+  ok: "var(--green)",
+  live: "var(--accent)",
+  warn: "var(--amber)",
+  off: "var(--text-tertiary)",
 };
 
 export function StatusDot({ state, pulse = true }: { state: ServiceState; pulse?: boolean }) {

@@ -3,7 +3,7 @@
 //
 // Set NEXT_PUBLIC_API_URL to point at the API (defaults to local uvicorn).
 
-import type { Candidate, CandidateStatus } from "../control-room/types";
+import type { Candidate, CandidateStatus, ScoreDetail } from "../control-room/types";
 
 export const API_BASE =
   (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
@@ -27,6 +27,26 @@ function labelFor(strategy: string): string {
   return STRATEGY_LABELS[strategy] ?? strategy.replace(/_/g, " ");
 }
 
+// Real scores object from eval.scoring.technical_score (see rezn_engine.py).
+export interface ApiScores {
+  technical_score?: number;
+  musical_quality?: number;
+  validity_gate?: number;
+  completeness?: number;
+  audio_valid?: boolean;
+  duration_ok?: boolean;
+  note_count?: number;
+  features?: {
+    harmonic_variety?: number;
+    voice_leading?: number;
+    resolution?: number;
+    register_range?: number;
+  };
+  audio?: { duration_seconds?: number; peak?: number; rms?: number };
+  critic?: { score?: number; reasons?: string[]; source?: string };
+  reasons?: string[];
+}
+
 // ── API response shapes (subset of src/rezn_ai/models.py) ───────────────────
 export interface ApiCandidate {
   candidate_id: string;
@@ -38,12 +58,54 @@ export interface ApiCandidate {
   tempo: number;
   status: CandidateStatus;
   technical_score: number;
-  scores: { audio?: { duration_seconds?: number } } & Record<string, unknown>;
+  scores: ApiScores & Record<string, unknown>;
   reasons: string[];
   audio_url: string | null;
   arrangement_url: string | null;
   trace_url: string | null;
   parent_candidate_id: string | null;
+}
+
+// Feature weights mirror eval.scoring.technical_score's musical_quality blend.
+const FEATURE_META: { key: keyof NonNullable<ApiScores["features"]>; label: string; weight: number }[] = [
+  { key: "harmonic_variety", label: "Harmonic variety", weight: 0.32 },
+  { key: "voice_leading", label: "Voice leading", weight: 0.28 },
+  { key: "resolution", label: "Tonal resolution", weight: 0.2 },
+  { key: "register_range", label: "Register range", weight: 0.2 },
+];
+
+function toScoreDetail(s: ApiScores | undefined, fallbackScore: number): ScoreDetail {
+  const features = (s?.features ?? {}) as Record<string, number | undefined>;
+  return {
+    technicalScore: Number(s?.technical_score ?? fallbackScore ?? 0),
+    musicalQuality: Number(s?.musical_quality ?? 0),
+    validityGate: Number(s?.validity_gate ?? 1),
+    features: FEATURE_META.map((m) => ({
+      key: m.key,
+      label: m.label,
+      value: Number(features[m.key] ?? 0),
+      weight: m.weight,
+    })),
+    completeness: Number(s?.completeness ?? 0),
+    audioValid: Boolean(s?.audio_valid),
+    durationOk: Boolean(s?.duration_ok),
+    noteCount: Number(s?.note_count ?? 0),
+    audio: s?.audio
+      ? {
+          durationSeconds: s.audio.duration_seconds,
+          peak: s.audio.peak,
+          rms: s.audio.rms,
+        }
+      : undefined,
+    critic: s?.critic
+      ? {
+          score: Number(s.critic.score ?? 0),
+          reasons: s.critic.reasons ?? [],
+          source: s.critic.source ?? "—",
+        }
+      : undefined,
+    reasons: s?.reasons ?? [],
+  };
 }
 
 export interface ApiEvent {
@@ -89,6 +151,7 @@ export function toUiCandidate(c: ApiCandidate, rank: number): Candidate {
     parentId: c.parent_candidate_id ?? undefined,
     audioUrl: artifactUrl(c.audio_url),
     traceUrl: c.trace_url ?? undefined,
+    scoreDetail: toScoreDetail(c.scores, Number(c.technical_score ?? 0)),
   };
 }
 

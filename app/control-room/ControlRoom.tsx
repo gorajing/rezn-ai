@@ -9,9 +9,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ActivityEvent,
+  AgentAction,
   BatchStatus,
   Candidate,
   ChatMessage,
+  CopilotContext,
   EventLevel,
   ServiceStatus,
 } from "./types";
@@ -22,6 +24,7 @@ import { ChatPanel } from "./components/ChatPanel";
 import { CandidateBoard } from "./components/CandidateBoard";
 import { SystemStatus } from "./components/SystemStatus";
 import { ActivityFeed } from "./components/ActivityFeed";
+import { CopilotBridge, type CopilotActionsApi } from "./CopilotBridge";
 
 const DEFAULT_SERVICES: ServiceStatus[] = [
   { id: "engine", label: "REZN Engine", state: "ok", detail: "Clean-room synthesis" },
@@ -52,11 +55,31 @@ export function ControlRoom() {
   const [prompt, setPrompt] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [services, setServices] = useState<ServiceStatus[]>(DEFAULT_SERVICES);
+  const [agentActions, setAgentActions] = useState<AgentAction[]>([]);
   const seenEvents = useRef<Set<string>>(new Set());
 
   const pushEvent = useCallback((level: EventLevel, message: string) => {
     setEvents((prev) => [...prev, { id: uid("evt"), level, message, ts: Date.now() }]);
   }, []);
+
+  // Record a CopilotKit/agent action so the Copilot panel shows real activity.
+  // Returns a finisher to mark it done (with real elapsed time).
+  const trackAction = useCallback(
+    (name: string, desc: string, source: AgentAction["source"]) => {
+      const id = uid("act");
+      const startedAt = Date.now();
+      setAgentActions((prev) =>
+        [{ id, name, desc, startedAt, status: "running" as const, source }, ...prev].slice(0, 8),
+      );
+      return (status: "done" | "error" = "done") =>
+        setAgentActions((prev) =>
+          prev.map((a) =>
+            a.id === id ? { ...a, status, durationMs: Date.now() - startedAt } : a,
+          ),
+        );
+    },
+    [],
+  );
 
   const say = useCallback((role: ChatMessage["role"], content: string) => {
     setMessages((prev) => [...prev, { id: uid("msg"), role, content, ts: Date.now() }]);
@@ -110,14 +133,17 @@ export function ControlRoom() {
 
   // ── Step 1 + 2: brief -> generate ───────────────────────────────────────────
   const handleSubmit = useCallback(
-    async (text: string) => {
+    async (text: string, source: AgentAction["source"] = "ui") => {
       if (batchStatus === "generating") return;
       setPrompt(text);
       setBatchStatus("generating");
       setCandidates([]);
       setPlayingId(null);
-      say("user", text);
+      if (source === "ui") say("user", text);
       pushEvent("agent", `Spawning ${DEFAULT_BRIEF.candidateCount} composer agents…`);
+      const intent = text.length > 40 ? `${text.slice(0, 40)}…` : text;
+      const doneEmbed = trackAction("embedUserIntent", `Vectorized brief: ${intent}`, source);
+      const doneGen = trackAction("generateBatch", `Synthesizing ${DEFAULT_BRIEF.candidateCount} tracks`, source);
       try {
         const batch = await api.startBatch({
           prompt: text,
@@ -126,8 +152,12 @@ export function ControlRoom() {
           tempo: DEFAULT_BRIEF.tempo,
           candidate_count: DEFAULT_BRIEF.candidateCount,
         });
+        doneEmbed();
+        doneGen();
+        const doneRank = trackAction("rankCandidates", `Scored ${batch.candidates.length} candidates`, source);
         applyBatch(batch);
         setBatchStatus("ranked");
+        doneRank();
         const top = rankCandidates(batch.candidates)[0];
         if (top) {
           say(
@@ -138,103 +168,126 @@ export function ControlRoom() {
           );
         }
       } catch (err) {
+        doneEmbed("error");
+        doneGen("error");
         setBatchStatus("idle");
         pushEvent("warn", `Generation failed: ${(err as Error).message}`);
         say("assistant", `I couldn't reach the generator API at ${API_BASE}. Is the backend running?`);
       }
     },
-    [batchStatus, applyBatch, pushEvent, say],
+    [batchStatus, applyBatch, pushEvent, say, trackAction],
   );
 
   // ── Step 3: curate ───────────────────────────────────────────────────────────
   const handleApprove = useCallback(
-    async (id: string) => {
+    async (id: string, source: AgentAction["source"] = "ui") => {
+      const done = trackAction("approveCandidate", `Recorded approval: ${findLabel(id)}`, source);
       try {
         const c = await api.approve(id);
         setCandidates((prev) => prev.map((x) => (x.id === id ? { ...x, status: c.status } : x)));
         pushEvent("success", `Approved ${findLabel(id)}`);
+        done();
       } catch (err) {
+        done("error");
         pushEvent("warn", `Approve failed: ${(err as Error).message}`);
       }
     },
-    [findLabel, pushEvent],
+    [findLabel, pushEvent, trackAction],
   );
 
   const handleReject = useCallback(
-    async (id: string) => {
+    async (id: string, reason = "rejected from control room", source: AgentAction["source"] = "ui") => {
+      const done = trackAction("rejectCandidate", `Recorded rejection: ${findLabel(id)}`, source);
       try {
-        const c = await api.reject(id, "rejected from control room");
+        const c = await api.reject(id, reason);
         setCandidates((prev) => prev.map((x) => (x.id === id ? { ...x, status: c.status } : x)));
         pushEvent("warn", `Rejected ${findLabel(id)}`);
+        done();
       } catch (err) {
+        done("error");
         pushEvent("warn", `Reject failed: ${(err as Error).message}`);
       }
     },
-    [findLabel, pushEvent],
+    [findLabel, pushEvent, trackAction],
   );
 
   // ── Step 4: learn — per-candidate variant ────────────────────────────────────
   const handleVariant = useCallback(
-    async (id: string) => {
+    async (id: string, note = "more energy", source: AgentAction["source"] = "ui") => {
       if (!batchId) return;
       const label = findLabel(id);
       setCandidates((prev) => prev.map((c) => (c.id === id ? { ...c, status: "variant_requested" } : c)));
       pushEvent("agent", `Refining a variant of ${label}…`);
-      say("assistant", `On it — composing a refined variant of "${label}" from your feedback.`);
+      say("assistant", `On it — composing a refined variant of "${label}"${note ? ` (${note})` : ""}.`);
+      const done = trackAction("generateVariant", `Composing variant of ${label}`, source);
       try {
-        await api.variant(id, "more energy");
+        await api.variant(id, note);
         const batch = await api.getBatch(batchId);
         applyBatch(batch);
         pushEvent("success", `Refined variant of ${label} ready`);
+        done();
       } catch (err) {
+        done("error");
         pushEvent("warn", `Variant failed: ${(err as Error).message}`);
       }
     },
-    [batchId, findLabel, applyBatch, pushEvent, say],
+    [batchId, findLabel, applyBatch, pushEvent, say, trackAction],
   );
 
   // ── Step 4 (batch): refine the whole batch from approvals/rejections ─────────
-  const handleRefine = useCallback(async () => {
-    if (!batchId) return;
-    setBatchStatus("generating");
-    setPlayingId(null);
-    pushEvent("agent", "Refining the next batch from your approvals & rejections…");
-    say("assistant", "Learning from your feedback — generating the next iteration.");
-    try {
-      const child = await api.refine(batchId);
-      applyBatch(child);
-      setBatchStatus("ranked");
-      setPrompt((p) => (p ? `${p} (refined)` : p));
-      const top = rankCandidates(child.candidates)[0];
-      if (top) {
-        say(
-          "assistant",
-          `Refined batch ready — weighted toward what you approved. "${top.label}" now leads at ${Math.round(
-            top.score * 100,
-          )}.`,
-        );
+  const handleRefine = useCallback(
+    async (source: AgentAction["source"] = "ui") => {
+      if (!batchId) return;
+      setBatchStatus("generating");
+      setPlayingId(null);
+      pushEvent("agent", "Refining the next batch from your approvals & rejections…");
+      say("assistant", "Learning from your feedback — generating the next iteration.");
+      const doneFb = trackAction("extractFeedback", "Parsed approve/reject signal", source);
+      const doneRefine = trackAction("refineBatch", "Reweighting strategies from feedback", source);
+      try {
+        const child = await api.refine(batchId);
+        doneFb();
+        applyBatch(child);
+        setBatchStatus("ranked");
+        setPrompt((p) => (p ? `${p} (refined)` : p));
+        doneRefine();
+        const top = rankCandidates(child.candidates)[0];
+        if (top) {
+          say(
+            "assistant",
+            `Refined batch ready — weighted toward what you approved. "${top.label}" now leads at ${Math.round(
+              top.score * 100,
+            )}.`,
+          );
+        }
+      } catch (err) {
+        doneFb("error");
+        doneRefine("error");
+        setBatchStatus("ranked");
+        pushEvent("warn", `Refine failed: ${(err as Error).message}`);
       }
-    } catch (err) {
-      setBatchStatus("ranked");
-      pushEvent("warn", `Refine failed: ${(err as Error).message}`);
-    }
-  }, [batchId, applyBatch, pushEvent, say]);
+    },
+    [batchId, applyBatch, pushEvent, say, trackAction],
+  );
 
   // ── Step 5: final ─────────────────────────────────────────────────────────────
   const handleSelectFinal = useCallback(
-    async (id: string) => {
+    async (id: string, source: AgentAction["source"] = "ui") => {
       if (!batchId) return;
+      const done = trackAction("selectFinalTrack", `Locking final: ${findLabel(id)}`, source);
       try {
         const batch = await api.selectFinal(batchId, id);
         applyBatch(batch);
         setBatchStatus("completed");
         pushEvent("success", `Selected ${findLabel(id)} as the final track`);
         say("assistant", `"${findLabel(id)}" is locked in as your final track.`);
+        done();
       } catch (err) {
+        done("error");
         pushEvent("warn", `Select-final failed: ${(err as Error).message}`);
       }
     },
-    [batchId, findLabel, applyBatch, pushEvent, say],
+    [batchId, findLabel, applyBatch, pushEvent, say, trackAction],
   );
 
   const handleTrace = useCallback(
@@ -265,6 +318,26 @@ export function ControlRoom() {
     say("assistant", "Ready for a new brief. What should we make next?");
   }, [pushEvent, say]);
 
+  // Suggested-action chips trigger real actions (via the chat-driven path so
+  // they show up as Copilot actions in the panel).
+  const handleSuggestion = useCallback(
+    (key: string) => {
+      say("user", key);
+      const top = candidates[0];
+      if (key.startsWith("approve-top2")) {
+        candidates.slice(0, 2).forEach((c) => void handleApprove(c.id, "chat"));
+        say("assistant", "Approved the top two candidates.");
+      } else if (key.startsWith("variant-top")) {
+        if (top) void handleVariant(top.id, "raise energy", "chat");
+      } else if (key.startsWith("refine")) {
+        void handleRefine("chat");
+      } else if (top) {
+        void handleVariant(top.id, key, "chat");
+      }
+    },
+    [candidates, handleApprove, handleVariant, handleRefine, say],
+  );
+
   const activeStep = useMemo(() => {
     if (batchStatus === "generating") return 2;
     if (batchStatus === "completed") return 5;
@@ -282,8 +355,45 @@ export function ControlRoom() {
     [batchStatus, candidates],
   );
 
+  // Live snapshot of what the Copilot "knows" — derived from the real batch.
+  const copilotContext = useMemo<CopilotContext>(() => {
+    const ranked = [...candidates].sort((a, b) => a.rank - b.rank);
+    const top = ranked[0];
+    const approved = candidates.filter((c) => c.status === "approved" || c.status === "final").length;
+    const rejected = candidates.filter((c) => c.status === "rejected").length;
+    const iteration = candidates.some((c) => c.parentId) ? 2 : 1;
+    return {
+      intent: prompt ?? "—",
+      key: top?.key ?? DEFAULT_BRIEF.key,
+      tempo: top?.tempo ?? DEFAULT_BRIEF.tempo,
+      candidateCount: candidates.length,
+      topCandidate: top ? top.label : "—",
+      topScore: top?.score ?? 0,
+      approved,
+      rejected,
+      iteration,
+      // Confidence: blend the top score with how much the operator has curated.
+      confidence: top ? Math.min(0.99, top.score + 0.05 * (approved + rejected)) : 0,
+    };
+  }, [candidates, prompt]);
+
+  const copilotActions = useMemo<CopilotActionsApi>(
+    () => ({
+      generate: (p) => handleSubmit(p, "chat"),
+      approve: (id) => handleApprove(id, "chat"),
+      reject: (id, reason) => handleReject(id, reason ?? "rejected via copilot", "chat"),
+      variant: (id, note) => handleVariant(id, note ?? "more energy", "chat"),
+      refine: () => handleRefine("chat"),
+      selectFinal: (id) => handleSelectFinal(id, "chat"),
+    }),
+    [handleSubmit, handleApprove, handleReject, handleVariant, handleRefine, handleSelectFinal],
+  );
+
   return (
     <div className="relative z-10 flex h-[100dvh] flex-col overflow-hidden">
+      {/* Registers CopilotKit readable context + actions; renders nothing. */}
+      <CopilotBridge context={copilotContext} candidates={candidates} actions={copilotActions} />
+
       <TopBar
         batchStatus={batchStatus}
         batchId={batchId}
@@ -295,8 +405,11 @@ export function ControlRoom() {
         <ChatPanel
           messages={messages}
           busy={batchStatus === "generating"}
-          showExamples={batchStatus === "idle"}
-          onSubmit={handleSubmit}
+          agentActions={agentActions}
+          context={copilotContext}
+          hasBatch={candidates.length > 0}
+          onSubmit={(text) => handleSubmit(text, "ui")}
+          onSuggestion={handleSuggestion}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -318,7 +431,7 @@ export function ControlRoom() {
           />
         </main>
 
-        <aside className="hidden w-[340px] shrink-0 flex-col gap-4 border-l border-white/[0.06] bg-black/20 p-4 lg:flex">
+        <aside className="hidden w-[260px] shrink-0 flex-col gap-4 border-l border-line bg-surface p-4 lg:flex">
           <SystemStatus services={services} />
           <ActivityFeed events={events} />
         </aside>

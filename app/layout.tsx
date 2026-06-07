@@ -1,22 +1,23 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { DM_Sans, DM_Mono } from "next/font/google";
 import { CopilotKit } from "@copilotkit/react-core";
 import "@copilotkit/react-ui/styles.css";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const dmSans = DM_Sans({
+  variable: "--font-dm-sans",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const dmMono = DM_Mono({
+  variable: "--font-dm-mono",
   subsets: ["latin"],
+  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
   title: "REZN · Music Control Room",
-  description: "ChatGPT for music generation — generate, curate, and refine original tracks.",
+  description: "REZN Control Room — generate, curate, and refine original tracks.",
 };
 
 export default function RootLayout({
@@ -25,11 +26,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">
+    <html lang="en" className="h-full">
+      {/* Dark theme is the default on load; ThemeToggle swaps this class. */}
+      <body className={`theme-dark ${dmSans.variable} ${dmMono.variable} antialiased`}>
         <CopilotKit runtimeUrl="/api/copilotkit">{children}</CopilotKit>
       </body>
     </html>
