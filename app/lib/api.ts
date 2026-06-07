@@ -1,6 +1,6 @@
 // Live client for the REZN FastAPI backend (src/rezn_ai/api).
 
-import type { Candidate, CandidateStatus, ScoreDetail } from "../control-room/types";
+import type { AgentLane, Candidate, CandidateStatus, ScoreDetail } from "../control-room/types";
 import type { components } from "./api-types";
 
 export const API_BASE =
@@ -157,6 +157,44 @@ export function toUiCandidate(c: ApiCandidate, rank: number): Candidate {
 // API returns candidates ranked best-first; assign 1-based ranks for the UI.
 export function rankCandidates(cands: ApiCandidate[]): Candidate[] {
   return cands.map((c, i) => toUiCandidate(c, i + 1));
+}
+
+const ROLE_LABEL: Record<string, string> = {
+  orchestrator: "Orchestrator",
+  judge: "Judge",
+  reflector: "Reflector",
+};
+
+function laneLabel(agentId: string, role: string): string {
+  if (agentId.startsWith("composer:")) return labelFor(agentId.slice("composer:".length));
+  if (agentId.startsWith("critic:")) {
+    const lens = agentId.slice("critic:".length);
+    return `${lens.charAt(0).toUpperCase()}${lens.slice(1)} Critic`;
+  }
+  return ROLE_LABEL[role] ?? ROLE_LABEL[agentId] ?? agentId;
+}
+
+// Group agent.step (and agent-tagged) events into per-agent lanes, newest activity last.
+export function agentLanesFromEvents(events: ApiEvent[]): AgentLane[] {
+  const lanes = new Map<string, AgentLane>();
+  for (const e of events) {
+    const p = (e.payload ?? {}) as { agent_id?: string; role?: string };
+    if (!p.agent_id) continue;
+    const ts = Date.parse(e.ts) || Date.now();
+    const prev = lanes.get(p.agent_id);
+    lanes.set(p.agent_id, {
+      id: p.agent_id,
+      role: p.role ?? "agent",
+      label: laneLabel(p.agent_id, p.role ?? "agent"),
+      lastMessage: e.message,
+      steps: (prev?.steps ?? 0) + 1,
+      ts,
+    });
+  }
+  const order = ["orchestrator", "composer", "critic", "judge", "reflector"];
+  return [...lanes.values()].sort(
+    (a, b) => (order.indexOf(a.role) + 1 || 99) - (order.indexOf(b.role) + 1 || 99) || a.ts - b.ts,
+  );
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
