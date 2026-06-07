@@ -7,6 +7,7 @@ app has one place to initialize Weave and one place to report whether tracing is
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -134,6 +135,78 @@ def weave_op(name: str | None = None) -> Any:
     except ModuleNotFoundError:
         return lambda fn: fn
     return weave.op(name=name) if name else weave.op()
+
+
+# ── Agents view: sessions & turns (Weave agentic SDK, public preview) ──────────
+#
+# The Agents / Conversations / Spans tabs are driven by the Weave *agentic* SDK
+# (start_session / start_turn), which is SEPARATE from the @weave.op Traces tab.
+# A turn emits an ``invoke_agent`` span carrying ``gen_ai.agent.name`` (which
+# registers the agent) and the session's ``conversation.id`` (which groups turns
+# into one Conversation). This API is public-preview and unstable across 0.52.x,
+# so every call is guarded: real sessions/turns when Weave is initialized, and a
+# no-op context manager otherwise — never raising into the request path.
+
+
+def _agents_weave() -> Any:
+    """Return the ``weave`` module iff the agentic Agents SDK is usable here, else None.
+
+    Usable means: weave importable, exposes ``start_session``/``start_turn``, and a
+    client is initialized (``get_client()`` is not None — a session needs a live
+    client). Isolated into one patchable function so the helpers stay trivial and the
+    real-SDK path is unit-testable. Never raises.
+    """
+    try:
+        import weave  # type: ignore
+    except Exception:
+        return None
+    if not (hasattr(weave, "start_session") and hasattr(weave, "start_turn")):
+        return None
+    try:
+        if weave.get_client() is None:
+            return None
+    except Exception:
+        return None
+    return weave
+
+
+def weave_session(
+    *, agent_name: str, session_id: str, session_name: str = "", model: str = ""
+) -> Any:
+    """Open a Weave Agents *session* (a context manager) grouping all turns of one
+    batch lineage into a single Conversation. No-op when the agentic SDK isn't usable.
+
+    ``continue_parent_trace=False`` keeps each turn on its own OTel trace — the
+    documented choice for the standalone Agents/Conversations view rather than
+    nesting turns under an outer ``@weave.op`` call. Never raises into the request path.
+    """
+    weave = _agents_weave()
+    if weave is None:
+        return nullcontext()
+    try:
+        return weave.start_session(
+            agent_name=agent_name,
+            session_id=session_id,
+            session_name=session_name,
+            model=model,
+            continue_parent_trace=False,
+        )
+    except Exception:
+        return nullcontext()
+
+
+def weave_turn(*, user_message: str = "", agent_name: str = "", model: str = "") -> Any:
+    """Open a Weave *turn* (a context manager) inside the current session. The turn
+    emits the ``invoke_agent`` span that registers ``agent_name`` in the Agents view.
+    No-op when the agentic SDK isn't usable; never raises into the request path.
+    """
+    weave = _agents_weave()
+    if weave is None:
+        return nullcontext()
+    try:
+        return weave.start_turn(user_message=user_message, agent_name=agent_name, model=model)
+    except Exception:
+        return nullcontext()
 
 
 # ── Human-in-the-loop feedback on traced calls ────────────────────────────────
