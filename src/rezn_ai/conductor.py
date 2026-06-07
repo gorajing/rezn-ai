@@ -54,6 +54,9 @@ from .models import (
 
 # The single agent that every conductor turn registers under in the Weave Agents view.
 _AGENT_NAME = "rezn-conductor"
+# Once-per-parent prompt-arm mutation marker: bounded lifetime so these idempotency
+# markers self-expire (any real re-refinement happens far inside this window).
+_ARMMUT_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 
 class BatchConductor:
@@ -733,7 +736,7 @@ class BatchConductor:
         # refine_batch retries of the same parent cannot both evolve the arms.
         armmut_key = f"rezn:refine:armmut:{self.producer_id}:{parent_batch_id}"
         try:
-            claimed = self.store.claim_once(armmut_key)
+            claimed = self.store.claim_once(armmut_key, ttl_seconds=_ARMMUT_TTL_SECONDS)
         except Exception:
             if agent_memory_required():
                 raise  # production: a broken policy store fails fast, not silently

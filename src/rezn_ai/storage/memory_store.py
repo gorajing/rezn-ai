@@ -11,7 +11,7 @@ import threading
 from copy import deepcopy
 from typing import Any
 
-from ..models import Batch, BatchEvent, Candidate, MemoryLesson
+from ..models import MAX_LESSONS, Batch, BatchEvent, Candidate, MemoryLesson
 
 
 class InMemoryStore:
@@ -81,6 +81,10 @@ class InMemoryStore:
                 (d, lsn) for (d, lsn) in self._lessons if lsn.dedup_key != stored.dedup_key
             ]
         self._lessons.append((improvement_delta, stored))
+        # Cap to the strongest MAX_LESSONS so the list cannot grow without bound
+        # (parity with RedisStore._cap_lessons).
+        if len(self._lessons) > MAX_LESSONS:
+            self._lessons = sorted(self._lessons, key=lambda x: x[0], reverse=True)[:MAX_LESSONS]
         return stored
 
     def recall_top_lessons(self, limit: int = 5) -> list[MemoryLesson]:
@@ -115,10 +119,12 @@ class InMemoryStore:
         snap = self._profiles.get(producer_id, {}).get(profile_id)
         return deepcopy(snap) if snap is not None else None
 
-    def claim_once(self, key: str) -> bool:
+    def claim_once(self, key: str, ttl_seconds: int | None = None) -> bool:
         """Atomically claim ``key`` exactly once (True for the first caller).
 
         Lock-guarded so concurrent threads cannot both observe the key missing.
+        ``ttl_seconds`` is accepted for parity with RedisStore but ignored: the
+        in-memory claim set lives only for the process, so there is nothing to expire.
         """
         with self._claims_lock:
             if key in self._claims:

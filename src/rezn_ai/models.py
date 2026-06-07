@@ -121,6 +121,13 @@ class MemoryLesson(BaseModel):
     created_at: str = Field(default_factory=utc_now)
 
 
+# The demo store keeps at most this many lessons (highest improvement_delta first).
+# Beyond it the weakest-signal lessons are dropped so the set cannot grow without
+# bound across many demo runs; recall only reads the top few, so the cap never
+# starves recall — it only trims the long tail.
+MAX_LESSONS = 1000
+
+
 # ── API request bodies ─────────────────────────────────────────────────────────
 
 
