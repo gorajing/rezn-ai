@@ -112,6 +112,14 @@ This is the part that makes it demonstrable. Two surfaces, one event source.
   without a `weave_op`/`weave_call_id` on every event. Per-candidate traces already ride on
   the candidate's own `weave_call_id` → `trace_url`. (Phase 1 intentionally omits the
   earlier-sketched `weave_op` event field — it had no consumer.)
+- **Phase 1 scope = the `start_batch` path.** The contract above is implemented for batch
+  generation. Documented follow-ups (Phase 1.5+): (a) the refine path (`reflect_on_feedback`
+  under `_agent_scope`; tagging the `reflection` + refined `candidate.generated` events with
+  `agent_id`/`role`/`phase="refine"`); (b) promoting composers to distinct *Agents-view*
+  agents via per-agent `weave_session` (they currently trace as `compose_candidate` in the
+  Traces tab and render as Agent Room lanes); (c) driving the Agent Room from the live
+  `GET /api/batches/{id}/events` stream so lanes fill *during* generation (today they render
+  from the returned `batch.events`, i.e. once the batch completes).
 
 ## 5. Key design decisions
 
