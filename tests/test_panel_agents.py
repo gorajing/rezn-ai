@@ -115,6 +115,22 @@ def test_lens_coerce_dedupes_and_aligns_favorite(monkeypatch):
     assert v.favorite == v.ranking[0]     # favorite aligned to the top of the ranking
 
 
+def test_panel_is_advisory_even_when_inference_required(monkeypatch):
+    # Even under production posture (inference_required), a runtime LLM failure degrades
+    # to the deterministic fallback — the advisory panel never sinks the batch.
+    monkeypatch.setattr("rezn_ai.config.deep_mode_enabled", lambda: True)
+    monkeypatch.setattr("rezn_ai.agents.llm_agents.inference_required", lambda: True)
+    monkeypatch.setattr(
+        "rezn_ai.agents.llm_agents._inference_client", _client_returning("not json")
+    )
+    v = lens_critique("groove", _inputs())
+    assert v.source.startswith("fallback")
+    assert v.ranking == ("a", "b")
+    d = judge_panel(_inputs(), [])
+    assert d.source.startswith("fallback")
+    assert d.ranking == ("a", "b")
+
+
 def test_judge_coerce_dedupes_and_aligns_winner(monkeypatch):
     monkeypatch.setattr("rezn_ai.config.deep_mode_enabled", lambda: True)
     monkeypatch.setattr(

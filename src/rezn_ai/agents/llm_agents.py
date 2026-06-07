@@ -393,6 +393,9 @@ def _coerce_lens_verdict(lens: str, raw: dict, fallback: LensVerdict) -> LensVer
 
 def _llm_lens_verdict(lens: str, candidates: list[CriticInput]) -> LensVerdict:
     client, model = _inference_client()
+    # Deliberately lens-only: each critic sees its lens feature subset (not the overall
+    # technical_score) so the three lenses stay independent and genuinely disagree.
+    # technical_score rides in CriticInput for the JUDGE, which combines the lens verdicts.
     rows = "\n".join(
         f"- {c.candidate_id} [{c.strategy}] "
         + str({k: round(float(c.features.get(k, 0.0)), 2) for k in LENS_FEATURE_GROUPS.get(lens, ())})
@@ -423,8 +426,14 @@ def _llm_lens_verdict(lens: str, candidates: list[CriticInput]) -> LensVerdict:
 @weave_op("lens_critique")
 def lens_critique(lens: str, candidates: list[CriticInput]) -> LensVerdict:
     """One panel critic ranking all candidates through one lens. Deep mode -> LLM,
-    otherwise a deterministic feature-average. Mirrors ``critique``'s gating + graceful
-    fallback: a slow/failing call degrades to the deterministic verdict and records why."""
+    otherwise a deterministic feature-average.
+
+    The panel is *advisory observability* (it surfaces reasoning in events and never
+    gates the already-scored candidates), so a runtime LLM error — timeout, parse
+    failure, API error — degrades to the deterministic verdict and records why, even in
+    production. It does not raise into the request path. (A *misconfiguration* — deep
+    mode requested with inference off — never reaches here: deep_mode_enabled() is false,
+    and the conductor surfaces a visible warning.)"""
     from ..config import deep_mode_enabled
 
     fallback = _fallback_lens_verdict(lens, candidates)
@@ -432,9 +441,7 @@ def lens_critique(lens: str, candidates: list[CriticInput]) -> LensVerdict:
         return fallback
     try:
         return _llm_lens_verdict(lens, candidates)
-    except Exception as exc:
-        if inference_required():
-            raise RuntimeError(f"Live inference failed for {lens} critic: {exc}") from exc
+    except Exception as exc:  # advisory: a panel hiccup must never sink the batch
         return LensVerdict(
             lens, fallback.ranking, fallback.favorite,
             f"{fallback.rationale} (llm_error:{type(exc).__name__})",
@@ -493,7 +500,10 @@ def _llm_judge(candidates: list[CriticInput], verdicts: list[LensVerdict]) -> Ju
 @weave_op("judge_panel")
 def judge_panel(candidates: list[CriticInput], verdicts: list[LensVerdict]) -> JudgeDecision:
     """Aggregate the lens verdicts + technical scores into a reasoned ranking. Deep mode ->
-    LLM, otherwise deterministic technical-score order (the current behavior)."""
+    LLM, otherwise deterministic technical-score order (the current behavior).
+
+    Advisory like ``lens_critique``: a runtime LLM error degrades to the deterministic
+    ranking (recording why in ``source``) and never raises into the request path."""
     from ..config import deep_mode_enabled
 
     fallback = _fallback_judge(candidates)
@@ -501,9 +511,7 @@ def judge_panel(candidates: list[CriticInput], verdicts: list[LensVerdict]) -> J
         return fallback
     try:
         return _llm_judge(candidates, verdicts)
-    except Exception as exc:
-        if inference_required():
-            raise RuntimeError(f"Live inference failed for judge: {exc}") from exc
+    except Exception as exc:  # advisory: a panel hiccup must never sink the batch
         return JudgeDecision(
             fallback.ranking, fallback.winner,
             f"{fallback.rationale} (llm_error:{type(exc).__name__})",
