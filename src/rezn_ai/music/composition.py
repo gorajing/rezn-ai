@@ -410,6 +410,8 @@ def compose_arrangement(
     # Genre overlay (groove/swing/scale/chord idiom) is detected from the prompt
     # unless passed explicitly; None leaves the native kernel idiom untouched.
     genre = genre or detect_genre(prompt)
+    if genre:
+        genre = genre.lower()  # normalize explicit caller casing so all emitted fields agree
     profile = resolve_profile(
         strategy=strategy, genre=genre, energy=energy, seed=seed, prompt=prompt, taste=taste
     )

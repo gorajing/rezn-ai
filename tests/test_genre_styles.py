@@ -159,6 +159,16 @@ def test_genre_auto_detected_from_prompt():
     assert arr["provenance"]["swing"] > 0.0  # jazz applies swing
 
 
+def test_explicit_genre_is_case_normalized_in_output():
+    """Explicit genre casing is normalized so identity/provenance/strategy agree (Codex)."""
+    arr = compose_arrangement(
+        title="t", key="D#", mode="minor", tempo=128, seed=77,
+        strategy="groove_architect", genre="House",
+    )
+    assert arr["identity"]["genre"] == "house"
+    assert arr["provenance"]["genre"] == "house"
+
+
 def test_detect_genre_matches_word_starts_not_mid_word_substrings():
     # The bug: "house" is embedded in "warehouse" and must not match.
     assert detect_genre("dark warehouse techno") is None
