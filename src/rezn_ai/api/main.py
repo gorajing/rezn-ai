@@ -78,7 +78,9 @@ def _build_store() -> InMemoryStore | Any:
 
     if required:
         raise RuntimeError(f"{reason} (REDIS_REQUIRED or REZN_PRODUCTION is set)")
-    raise RuntimeError(f"{reason} — set REDIS_URL and REDIS_REQUIRED=true for production")
+    # Graceful degradation: Redis falls back to InMemoryStore unless required.
+    logger.warning("%s — falling back to InMemoryStore (set REDIS_REQUIRED=true to fail fast)", reason)
+    return InMemoryStore()
 
 
 app = FastAPI(

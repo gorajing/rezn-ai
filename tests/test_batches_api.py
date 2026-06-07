@@ -21,6 +21,29 @@ def _start(client, count: int = 2) -> dict:
 
 # ── Doctor ────────────────────────────────────────────────────────────────────
 
+def test_build_store_falls_back_to_memory_on_dead_redis(monkeypatch) -> None:
+    """Graceful degradation: a configured-but-unreachable Redis (not required) must
+    fall back to InMemoryStore, not crash the API at startup."""
+    import rezn_ai.storage.redis_store as redis_store_mod
+    from rezn_ai.api import main as api_main
+    from rezn_ai.storage.memory_store import InMemoryStore
+
+    monkeypatch.delenv("REZN_DISABLE_REDIS", raising=False)
+    monkeypatch.setenv("REDIS_REQUIRED", "0")
+    monkeypatch.setenv("REZN_PRODUCTION", "0")
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6390/0")
+
+    class _DeadRedis:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        def ping(self) -> bool:
+            return False
+
+    monkeypatch.setattr(redis_store_mod, "RedisStore", _DeadRedis)
+    assert isinstance(api_main._build_store(), InMemoryStore)
+
+
 def test_doctor_reports_engine_ready(client) -> None:
     body = client.get("/api/doctor").json()
     assert body["checks"]["generator_engine"] is True

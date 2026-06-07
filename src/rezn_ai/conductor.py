@@ -642,12 +642,14 @@ class BatchConductor:
         if self.store.get_profile(self.producer_id, armmut_key):
             prompt_deltas: dict[str, str] = {}
         else:
-            prompt_deltas = self._mutate_prompt_arms(parent)
+            # Set the marker BEFORE mutating so a crash between the two can never let
+            # a retry re-reward / re-mutate the arms (at-most-once, not at-least-once).
             try:
                 self.store.save_profile(self.producer_id, armmut_key, {"applied": True})
             except Exception:
                 if agent_memory_required():
                     raise
+            prompt_deltas = self._mutate_prompt_arms(parent)
         decided_count = len(approved) + len(rejected)
         confidence = round(min(1.0, decided_count / max(1, len(parent_candidates))), 4)
         policy_update = build_policy_update(
