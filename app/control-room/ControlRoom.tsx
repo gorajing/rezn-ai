@@ -156,6 +156,7 @@ export function ControlRoom() {
       setActiveBrief({ genre: controls?.genre, key: c.key, mode: c.mode, tempo: c.tempo });
       setBatchStatus("generating");
       setCandidates([]);
+      setAgents([]);
       setPlayingId(null);
       if (source === "ui") say("user", text);
       pushEvent("agent", `Spawning ${DEFAULT_BRIEF.candidateCount} composer agents…`);

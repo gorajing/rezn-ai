@@ -117,7 +117,8 @@ export interface BriefControls {
   candidateCount: number;
 }
 
-// One ensemble agent's lane in the Agent Room, derived from agent.step events.
+// One ensemble agent's lane in the Agent Room, derived from agent-tagged events
+// (agent.step plus the composer-tagged candidate.generated), grouped by agent_id.
 export interface AgentLane {
   id: string;        // agent_id, e.g. "orchestrator" | "composer:groove_architect" | "critic:mix"
   role: string;      // orchestrator | composer | critic | judge | reflector
