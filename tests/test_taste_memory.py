@@ -104,13 +104,16 @@ def test_derive_bias_rejection_penalizes_strategy():
     assert any("avoids" in n for n in bias.notes)
 
 
-def test_plan_candidates_negative_boost_reduces_slots():
-    kw = dict(prompt="x", key="D#", mode="minor", tempo=128.0, count=5)
+def test_plan_candidates_negative_boost_drops_least_favoured():
+    # count < #strategies: the penalised strategy is dropped first, and a fresh
+    # batch stays distinct (never duplicates a take).
+    kw = dict(prompt="x", key="D#", mode="minor", tempo=128.0, count=4)
     bias = PlanningBias(strategy_boosts={"texture_builder": -2.0, "groove_architect": 3.0})
     plan = plan_candidates(**kw, bias=bias)
     strategies = [p.strategy for p in plan]
-    assert strategies.count("texture_builder") <= 1
-    assert strategies.count("groove_architect") >= 2
+    assert "texture_builder" not in strategies  # penalised strategy dropped
+    assert "groove_architect" in strategies      # favoured strategy kept
+    assert len(set(strategies)) == len(strategies)  # distinct
 
 
 # ── plan_candidates: empty-bias is a strict no-op ────────────────────────────────
@@ -122,12 +125,28 @@ def test_plan_candidates_empty_bias_matches_none():
     assert plan_candidates(**kw, bias=PlanningBias()) == base
 
 
-def test_plan_candidates_boost_allocates_more_slots():
+def test_plan_candidates_boost_leads_with_favoured_and_stays_distinct():
+    # A fresh batch (count <= #strategies) leads with the favoured strategy but
+    # keeps every take distinct — no duplicate, indistinguishable candidates.
     kw = dict(prompt="x", key="D#", mode="minor", tempo=128.0, count=3)
     bias = PlanningBias(strategy_boosts={"groove_architect": 6.0})
     plan = plan_candidates(**kw, bias=bias)
     strategies = [p.strategy for p in plan]
-    assert strategies.count("groove_architect") >= 2  # favoured strategy dominates
+    assert strategies[0] == "groove_architect"      # favoured leads the plan
+    assert len(set(strategies)) == len(strategies)  # distinct (no duplicate takes)
+
+
+def test_plan_candidates_overflow_duplicates_most_favoured():
+    # count > #strategies: every strategy appears once, then the most-favoured
+    # takes the extra slots (distinct variants only happen past the strategy count).
+    from rezn_ai.generation.strategies import STRATEGIES
+
+    kw = dict(prompt="x", key="D#", mode="minor", tempo=128.0, count=len(STRATEGIES) + 1)
+    bias = PlanningBias(strategy_boosts={"groove_architect": 6.0})
+    plan = plan_candidates(**kw, bias=bias)
+    strategies = [p.strategy for p in plan]
+    assert set(strategies) == set(STRATEGIES)               # all present
+    assert strategies.count("groove_architect") == 2        # favoured gets the extra slot
 
 
 def test_plan_candidates_tempo_and_mode_applied():

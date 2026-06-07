@@ -31,15 +31,19 @@ def test_no_history_batch_is_unbiased(tmp_path):
 
 def test_taste_recall_biases_fresh_batch(tmp_path):
     cond = _conductor(tmp_path)
-    # Seed a strong, proven taste for groove_architect.
+    # Seed strong taste for energy_curve — a strategy the unbiased round-robin
+    # (groove/harmony/texture for count=3) would NOT include.
     cond.store.remember(
-        MemoryLesson(body="groove_architect in D# minor approved",
-                     strategy="groove_architect", tags=["groove_architect", "minor"]),
+        MemoryLesson(body="energy_curve in D# minor approved",
+                     strategy="energy_curve", tags=["energy_curve", "minor"]),
         improvement_delta=6.0,
     )
     batch = cond.start_batch(BatchCreateRequest(brief=_brief(3)))
-    groove = [c for c in batch.candidates if c.strategy == "groove_architect"]
-    assert len(groove) >= 2  # taste pulled more groove candidates than round-robin would
+    strategies = [c.strategy for c in batch.candidates]
+    # Taste pulls a favoured strategy into the batch...
+    assert "energy_curve" in strategies
+    # ...but a fresh batch stays maximally distinct — no two takes share a strategy.
+    assert len(set(strategies)) == len(strategies)
     assert "taste.recalled" in [e.type for e in batch.events]
 
 
@@ -430,3 +434,21 @@ def test_taste_recall_endpoint(client):
 def test_doctor_reports_agent_memory(client):
     checks = client.get("/api/doctor").json()["checks"]
     assert "agent_memory" in checks
+
+
+def test_allocate_slots_keeps_distinct_strategies_until_overflow():
+    """A fresh batch stays distinct: taste orders/selects strategies but does not
+    duplicate one until count exceeds the number of strategies."""
+    from rezn_ai.generation.strategies import STRATEGIES, _allocate_slots
+
+    # count <= #strategies: distinct, favoured first, least-favoured dropped.
+    slots = _allocate_slots({"energy_curve": 5.0}, 3)
+    assert len(set(slots)) == 3
+    assert slots[0] == "energy_curve"  # the favoured strategy leads the plan
+    # count == #strategies: all five exactly once.
+    five = _allocate_slots({"groove_architect": 5.0}, len(STRATEGIES))
+    assert sorted(five) == sorted(STRATEGIES)
+    # count > #strategies: every strategy once, extras to the most-favoured.
+    over = _allocate_slots({"groove_architect": 5.0}, len(STRATEGIES) + 2)
+    assert set(over) == set(STRATEGIES)
+    assert over.count("groove_architect") == 2

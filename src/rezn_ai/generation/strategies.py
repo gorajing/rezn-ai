@@ -72,9 +72,10 @@ def plan_candidates(
     base = _brief_seed(prompt, key, mode, tempo)
 
     empty_bias = bias is None or bias.is_empty
-    # Strategy boosts change which strategy fills each slot (favoured strategies get
-    # more candidates); tempo/mode nudges change the content of every slot. With no
-    # bias both are inert and the plan is identical to the historical round-robin.
+    # Strategy boosts change WHICH strategies fill the slots and their order (favoured
+    # first, least-favoured dropped) while keeping a fresh batch distinct; tempo/mode
+    # nudges change the content of every slot. With no bias both are inert and the
+    # plan is identical to the historical round-robin.
     if not empty_bias and bias.strategy_boosts:
         slot_strategies = _allocate_slots(bias.strategy_boosts, count)
     else:
@@ -100,26 +101,29 @@ def plan_candidates(
 
 
 def _allocate_slots(strategy_boosts: dict[str, float], count: int) -> list[str]:
-    """Deterministically allocate ``count`` slots across strategies by taste boost.
+    """Deterministically choose ``count`` strategies, ordered by taste.
 
-    Largest-remainder proportional allocation over weights ``1 + max(0, boost)``;
-    favoured strategies get proportionally more slots. Fully deterministic
-    (ties broken by strategy name), so a given (boosts, count) is reproducible.
+    A fresh batch must stay maximally DISTINCT ("same brief, distinct productions"),
+    so every slot is a *different* strategy until ``count`` exceeds the number of
+    strategies — only then do the most-favoured strategies take the extra slots.
+    Favoured strategies lead the plan; the least-favoured are dropped first. Fully
+    deterministic (ties broken by strategy name), so a given (boosts, count) is
+    reproducible.
+
+    (Refinement uses ``agents.harness._allocate`` instead, which *does* hand a
+    favoured strategy more slots — there the repeats are distinct variants of an
+    approved parent, not indistinguishable copies of one fresh take.)
     """
     # Negative boosts penalize a strategy (floor keeps every strategy reachable).
     weights = {s: max(0.05, 1.0 + strategy_boosts.get(s, 0.0)) for s in STRATEGIES}
-    total = sum(weights.values())
-    raw = {s: weights[s] / total * count for s in STRATEGIES}
-    counts = {s: int(raw[s]) for s in STRATEGIES}
-    remainder = count - sum(counts.values())
-    by_frac = sorted(STRATEGIES, key=lambda s: (-(raw[s] - counts[s]), s))
-    for s in by_frac[:remainder]:
-        counts[s] += 1
-
-    slots: list[str] = []
-    for s in sorted(STRATEGIES, key=lambda s: (-counts[s], -weights[s], s)):
-        slots.extend([s] * counts[s])
-    return slots[:count]
+    ordered = sorted(STRATEGIES, key=lambda s: (-weights[s], s))
+    if count <= len(ordered):
+        return ordered[:count]
+    # Overflow: every strategy once, then extras cycle from the most-favoured.
+    slots = list(ordered)
+    for i in range(count - len(ordered)):
+        slots.append(ordered[i % len(ordered)])
+    return slots
 
 
 def variant_params(parent: CandidateParams, salt: int) -> CandidateParams:
