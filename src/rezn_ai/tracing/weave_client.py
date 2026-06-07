@@ -61,7 +61,12 @@ def initialize_weave(project: str | None = None) -> WeaveStatus:
     if not os.getenv("WANDB_API_KEY"):
         return WeaveStatus(project_name, available=True, initialized=False, reason="missing_wandb_api_key")
 
-    weave.init(project_name)
+    # A bad/expired key or an unreachable W&B must not take down API startup:
+    # degrade to untraced rather than raising out of module import.
+    try:
+        weave.init(project_name)
+    except Exception as exc:  # noqa: BLE001 - report any init failure, keep serving
+        return WeaveStatus(project_name, available=True, initialized=False, reason=f"init_failed:{type(exc).__name__}")
     return WeaveStatus(project_name, available=True, initialized=True, reason="ok")
 
 

@@ -30,7 +30,6 @@ _EVAL_ROWS = [
         "key": "D#",
         "mode": "minor",
         "tempo": 128.0,
-        "candidate_count": 2,
     },
     {
         "id": "uplifting-trance",
@@ -38,7 +37,6 @@ _EVAL_ROWS = [
         "key": "A",
         "mode": "major",
         "tempo": 138.0,
-        "candidate_count": 2,
     },
     {
         "id": "deep-house",
@@ -46,7 +44,6 @@ _EVAL_ROWS = [
         "key": "G",
         "mode": "minor",
         "tempo": 122.0,
-        "candidate_count": 2,
     },
 ]
 
@@ -124,7 +121,6 @@ class BatchModel(weave.Model):
         key: str,
         mode: str,
         tempo: float,
-        candidate_count: int = 1,
         **_: Any,  # absorb extra dataset columns (e.g. "id")
     ) -> dict[str, Any]:
         """Score one composition for the brief using the real scorer.
@@ -133,7 +129,11 @@ class BatchModel(weave.Model):
         inline (no multi-candidate batch, no per-op arrangement logging), so the
         Weave trace stays tiny and the evaluation flushes quickly. It exercises
         the same composition engine + technical_score the full pipeline uses.
+
+        Each brief gets a distinct, deterministic seed so the rows are genuinely
+        different compositions rather than the same seed at different keys.
         """
+        import hashlib
         from pathlib import Path as _Path
         from uuid import uuid4
 
@@ -143,8 +143,9 @@ class BatchModel(weave.Model):
         from ..music.composition import compose_arrangement
         from ..render.preview_synth import write_preview_wav
 
+        seed = self.base_seed + int(hashlib.sha256(text.encode()).hexdigest()[:6], 16)
         arrangement = compose_arrangement(
-            title=f"eval:{text[:24]}", key=key, mode=mode, tempo=tempo, seed=self.base_seed
+            title=f"eval:{text[:24]}", key=key, mode=mode, tempo=tempo, seed=seed
         )
         out = _Path(self.runs_root) / f"eval-{uuid4().hex[:8]}.wav"
         write_preview_wav(arrangement, out, sample_rate=8_000, max_seconds=4.0)
@@ -156,8 +157,8 @@ class BatchModel(weave.Model):
         sections = arrangement.get("form", {}).get("sections", [])
         return {
             "technical_score": score["technical_score"],
-            "musical_quality": score.get("musical_quality", 0.0),
-            # Small arrangement summary (no note arrays) for the structural scorers.
+            # Small arrangement summary (no note arrays) for the structural +
+            # brief-adherence scorers (they read identity key/mode/tempo + parts).
             "arrangement": {
                 "identity": arrangement.get("identity", {}),
                 "parts": {name: [] for name in parts},
@@ -188,6 +189,6 @@ def run_evaluation(runs_root: str = "./runs/eval", base_seed: int = 42) -> None:
     evaluation = weave.Evaluation(
         name="rezn-batch-quality",
         dataset=dataset,
-        scorers=[score_technical, score_completeness],
+        scorers=[score_technical, score_brief_adherence, score_completeness],
     )
     asyncio.run(evaluation.evaluate(model))
