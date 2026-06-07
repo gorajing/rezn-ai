@@ -302,6 +302,203 @@ def critique(arrangement: dict, metrics: dict, brief: CreativeBrief) -> Critique
 
 
 # --------------------------------------------------------------------------- #
+# Phase 2: LLM critic panel + judge (REZN_DEEP_MODE; deterministic fallback)
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class CriticInput:
+    """Compact per-candidate view the panel reasons over. Decouples this module from
+    the conductor's Candidate model so the panel agents stay unit-testable."""
+
+    candidate_id: str
+    strategy: str
+    technical_score: float
+    features: dict
+
+
+@dataclass(frozen=True)
+class LensVerdict:
+    """One lens critic's ranking of all candidates through its single lens."""
+
+    lens: str
+    ranking: tuple[str, ...]  # candidate_ids, best -> worst
+    favorite: str             # candidate_id ("" when there are no candidates)
+    rationale: str
+    source: str               # "wandb_inference" | "fallback" | "fallback:<Reason>"
+
+
+@dataclass(frozen=True)
+class JudgeDecision:
+    """The judge's aggregate ranking over the lens verdicts + technical scores."""
+
+    ranking: tuple[str, ...]
+    winner: str
+    rationale: str
+    confidence: float  # 0..1
+    source: str
+
+
+# Canonical lens -> scoring-feature groups (single source of truth; the conductor's
+# deterministic panel uses these too). Disjoint groups so the lenses genuinely disagree.
+LENS_FEATURE_GROUPS: dict[str, tuple[str, ...]] = {
+    "groove": ("groove_density", "part_balance"),
+    "harmony": ("harmonic_variety", "voice_leading", "resolution", "register_range"),
+    "mix": ("audio_health", "dynamic_shape"),
+}
+
+
+def lens_feature_score(features: dict, lens: str) -> float:
+    """Deterministic lens score = mean of the lens's feature subset (0..1)."""
+    keys = LENS_FEATURE_GROUPS.get(lens, ())
+    vals = [_clamp(float(features.get(k, 0.0))) for k in keys]
+    return round(sum(vals) / len(vals), 4) if vals else 0.0
+
+
+def _fallback_lens_verdict(lens: str, candidates: list[CriticInput]) -> LensVerdict:
+    ordered = sorted(candidates, key=lambda c: lens_feature_score(c.features, lens), reverse=True)
+    ranking = tuple(c.candidate_id for c in ordered)
+    fav = ordered[0] if ordered else None
+    rationale = (
+        f"{lens} favors {fav.strategy} ({lens_feature_score(fav.features, lens):.2f})"
+        if fav else "no candidates"
+    )
+    return LensVerdict(lens, ranking, fav.candidate_id if fav else "", rationale, "fallback")
+
+
+def _coerce_lens_verdict(lens: str, raw: dict, fallback: LensVerdict) -> LensVerdict:
+    valid = set(fallback.ranking)
+    ranking = tuple(str(c) for c in raw.get("ranking", []) if str(c) in valid)
+    ranking += tuple(cid for cid in fallback.ranking if cid not in ranking)  # never drop a candidate
+    favorite = str(raw.get("favorite", ""))
+    if favorite not in valid:
+        favorite = ranking[0] if ranking else ""
+    rationale = str(raw.get("rationale", ""))[:240] or fallback.rationale
+    return LensVerdict(lens, ranking, favorite, rationale, "wandb_inference")
+
+
+def _llm_lens_verdict(lens: str, candidates: list[CriticInput]) -> LensVerdict:
+    client, model = _inference_client()
+    rows = "\n".join(
+        f"- {c.candidate_id} [{c.strategy}] "
+        + str({k: round(float(c.features.get(k, 0.0)), 2) for k in LENS_FEATURE_GROUPS.get(lens, ())})
+        for c in candidates
+    )
+    system = (
+        f"You are the {lens.upper()} critic on a music panel; judge ONLY through your lens. "
+        "Respond with a compact JSON object only: ranking (array of candidate_id best->worst), "
+        "favorite (candidate_id), rationale (<=30 words)."
+    )
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"Candidates:\n{rows}\nRank them by your lens."},
+        ],
+        temperature=0.4,
+        max_tokens=400,
+    )
+    return _coerce_lens_verdict(
+        lens,
+        _parse_json_object(response.choices[0].message.content or ""),
+        _fallback_lens_verdict(lens, candidates),
+    )
+
+
+@weave_op("lens_critique")
+def lens_critique(lens: str, candidates: list[CriticInput]) -> LensVerdict:
+    """One panel critic ranking all candidates through one lens. Deep mode -> LLM,
+    otherwise a deterministic feature-average. Mirrors ``critique``'s gating + graceful
+    fallback: a slow/failing call degrades to the deterministic verdict and records why."""
+    from ..config import deep_mode_enabled
+
+    fallback = _fallback_lens_verdict(lens, candidates)
+    if not candidates or not deep_mode_enabled():
+        return fallback
+    try:
+        return _llm_lens_verdict(lens, candidates)
+    except Exception as exc:
+        if inference_required():
+            raise RuntimeError(f"Live inference failed for {lens} critic: {exc}") from exc
+        return LensVerdict(
+            lens, fallback.ranking, fallback.favorite,
+            f"{fallback.rationale} (llm_error:{type(exc).__name__})",
+            f"fallback:{type(exc).__name__}",
+        )
+
+
+def _fallback_judge(candidates: list[CriticInput]) -> JudgeDecision:
+    ordered = sorted(candidates, key=lambda c: c.technical_score, reverse=True)
+    ranking = tuple(c.candidate_id for c in ordered)
+    win = ordered[0] if ordered else None
+    rationale = (
+        f"top technical score {win.technical_score:.2f} ({win.strategy})" if win else "no candidates"
+    )
+    return JudgeDecision(ranking, win.candidate_id if win else "", rationale, 1.0 if win else 0.0, "fallback")
+
+
+def _coerce_judge(raw: dict, fallback: JudgeDecision) -> JudgeDecision:
+    valid = set(fallback.ranking)
+    ranking = tuple(str(c) for c in raw.get("ranking", []) if str(c) in valid)
+    ranking += tuple(cid for cid in fallback.ranking if cid not in ranking)
+    winner = str(raw.get("winner", ""))
+    if winner not in valid:
+        winner = ranking[0] if ranking else ""
+    rationale = str(raw.get("rationale", ""))[:240] or fallback.rationale
+    confidence = _clamp(float(raw.get("confidence", 0.5)))
+    return JudgeDecision(ranking, winner, rationale, round(confidence, 4), "wandb_inference")
+
+
+def _llm_judge(candidates: list[CriticInput], verdicts: list[LensVerdict]) -> JudgeDecision:
+    client, model = _inference_client()
+    model = os.getenv("REZN_JUDGE_MODEL") or model  # D5: optional stronger judge
+    panel = "\n".join(
+        f"- {v.lens}: ranked {list(v.ranking)} (favorite {v.favorite}; {v.rationale})" for v in verdicts
+    )
+    scores = "\n".join(
+        f"- {c.candidate_id} [{c.strategy}] technical={c.technical_score:.2f}" for c in candidates
+    )
+    system = (
+        "You are the head judge of a music panel. Aggregate the lens critics' verdicts and the "
+        "technical scores into a final ranking. Respond with a compact JSON object only: ranking "
+        "(array of candidate_id best->worst), winner (candidate_id), rationale (<=40 words), "
+        "confidence (0..1)."
+    )
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"Technical scores:\n{scores}\n\nPanel:\n{panel}\n\nDecide."},
+        ],
+        temperature=0.3,
+        max_tokens=400,
+    )
+    return _coerce_judge(
+        _parse_json_object(response.choices[0].message.content or ""), _fallback_judge(candidates)
+    )
+
+
+@weave_op("judge_panel")
+def judge_panel(candidates: list[CriticInput], verdicts: list[LensVerdict]) -> JudgeDecision:
+    """Aggregate the lens verdicts + technical scores into a reasoned ranking. Deep mode ->
+    LLM, otherwise deterministic technical-score order (the current behavior)."""
+    from ..config import deep_mode_enabled
+
+    fallback = _fallback_judge(candidates)
+    if not candidates or not deep_mode_enabled():
+        return fallback
+    try:
+        return _llm_judge(candidates, verdicts)
+    except Exception as exc:
+        if inference_required():
+            raise RuntimeError(f"Live inference failed for judge: {exc}") from exc
+        return JudgeDecision(
+            fallback.ranking, fallback.winner,
+            f"{fallback.rationale} (llm_error:{type(exc).__name__})",
+            fallback.confidence, f"fallback:{type(exc).__name__}",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # interpret_brief: read the whole prompt -> musical parameters (the "understanding")
 # --------------------------------------------------------------------------- #
 
