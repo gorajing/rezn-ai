@@ -20,7 +20,7 @@ Phase 2 adds **depth**: the critic panel and the judge become *real LLM agents* 
 
 **In scope**
 - An **LLM critic panel**: 3 lens critics (groove / harmony / mix), one LLM call per lens, each comparing all candidates through its lens and emitting a ranked verdict + rationale.
-- An **LLM judge**: one call that aggregates the three lens verdicts (plus `technical_score`) into a reasoned ranking + decision + confidence, and **may re-rank** the batch.
+- An **LLM judge**: one call that aggregates the three lens verdicts (plus `technical_score`) into a reasoned ranking + winner + confidence, **surfaced in its event** (no stored reorder in Phase 2 — D6′).
 - A new gate **`REZN_DEEP_MODE`** with explicit, fail-loud semantics relative to the existing `REZN_ENABLE_INFERENCE`.
 - Hermetic tests (mocked client) for live + fallback + degraded paths; a Weave eval comparing deep vs deterministic ranking.
 
@@ -42,8 +42,8 @@ _emit_panel_events(batch_id, candidates):
             emit agent.step (lens, verdict.ranking, verdict.rationale, source)
     with _agent_scope(AGENT_JUDGE):                          # ← Phase 1, unchanged
         decision = judge_panel(candidates, verdicts)         # ← Phase 2: LLM or fallback
-        if decision.reorders: apply ranking to the batch     # ← Phase 2: reasoned re-rank
-        emit agent.step (judge, decision.ranking, decision.rationale, source)
+        # judge surfaces ranking + winner + rationale in its event; no stored reorder (D6′)
+        emit agent.step (judge, decision.ranking, decision.winner, decision.rationale, source)
 ```
 
 The new functions live in `agents/llm_agents.py` and follow the module's established three-part pattern — `_fallback_X` (deterministic) / `_llm_X` (live) / public `X` (picks based on the flag). The LLM call happens *inside* the per-agent Weave session, so the trace tree shows each critic's and the judge's model call automatically — no new tracing code.
@@ -83,7 +83,7 @@ judge_panel(candidates, lens_verdicts) -> JudgeDecision
          source: "llm" | "fallback"
 ```
 
-- In deep mode the judge **may reorder** the batch (the conductor re-sorts displayed candidates to `decision.ranking` and records the rationale on the `batch.ranked` / judge `agent.step` event). This affects display order + the announced `winner` only — refinement parent selection stays on `composite_score` (D6).
+- In deep mode the judge **surfaces** a reasoned ranking + `winner` + rationale on its `agent.step` event. It does **not** re-sort stored `batch.candidates` in Phase 2 (D6′): the store exposes one ordering (`_rankings`, keyed on `technical_score`) read by all consumers incl. refinement parent selection, so a display-only reorder isn't cleanly separable. Board reorder off the judge event is a Phase 2.5 follow-up.
 - **Deterministic fallback = current behavior**: `ranking` = `technical_score` order, `winner` = `candidates[0]`, templated rationale.
 
 ## 5. `REZN_DEEP_MODE` semantics (fail loud)
@@ -105,7 +105,7 @@ Rules:
 - **Audio is untouched.** All candidates are rendered (deterministically, from seed/params) *before* the panel runs. The golden-render byte-identity test is unaffected by Phase 2 in any mode.
 - **Ranking order can change** only in deep mode. Therefore:
   - Every existing test that asserts candidate ordering runs with deep mode **off** (the default) — no changes needed.
-  - New deep-mode tests are **hermetic**: they monkeypatch the inference client (as `test_conductor_agents.py` already patterns) so no network is required, and assert the *plumbing* (LLM-sourced verdicts, judge reorder applied, fail-loud fallback) — not specific model text.
+  - New deep-mode tests are **hermetic**: they monkeypatch the inference client (as `test_conductor_agents.py` already patterns) so no network is required, and assert the *plumbing* (LLM-sourced verdicts + rationale + ranking in events, fail-loud fallback) — not specific model text.
 
 ## 7. Weave observability
 
@@ -127,7 +127,7 @@ No new tracing code. Because Phase 1 already opens a per-agent session/turn arou
 | --- | --- | --- | --- | --- |
 | `critique()` (exists) | per candidate | N | `critic_score` + reasons | feeds `technical_score` blend / parent selection |
 | **lens critic** (new) | per lens, sees all | 3 | comparative ranking + rationale | feeds the judge |
-| **judge** (new) | per batch | 1 | reasoned ranking + decision | re-ranks the batch |
+| **judge** (new) | per batch | 1 | reasoned ranking + winner + rationale | surfaced in its event (no stored reorder in P2, D6′) |
 
 The lens critics **consume** the per-candidate `critic` rationale where present (no re-derivation) and add the comparative, lens-specific view the judge needs.
 
@@ -137,18 +137,18 @@ The lens critics **consume** the per-candidate `critic` rationale where present 
 - **D1 — Lens critics are panel-level (3 calls), not per-candidate.** (§4.1)
 - **D2 — What critics optimize:** qualitative lens judgment, not a scalar reward; the judge synthesizes. The objective signal stays `technical_score`; the LLM layer adds reasoned re-ranking + rationale. (Resolves parent-spec open decision #2.) RL/actor-critic deferred to Phase 3.
 - **D3 — `REZN_DEEP_MODE` requires `REZN_ENABLE_INFERENCE`; unavailable ⇒ loud deterministic fallback.** (§5)
-- **D4 — Judge may reorder the batch in deep mode; deterministic order off by default.** (§4.2, §6)
+- **D4 → superseded by D6′ (below): judge surfaces a ranking but does not reorder stored candidates in Phase 2.** (§4.2, §6)
 
 **Resolved (operator delegated judgment, 2026-06-07)**
 - **D5 — Models:** one shared model (the existing `DEFAULT_INFERENCE_MODEL`) for all 4 panel calls, with an optional `REZN_JUDGE_MODEL` env override for a stronger judge. Rationale: matches the current single-model setup; avoids premature tiering; leaves the door open without new config debt. Revisit only if lens-critic cost or judge quality proves it out.
-- **D6 — Judge re-rank reach:** display order + announced `winner` + rationale only. Parent selection for refinement stays on `composite_score` (untouched). Rationale: keeps the LLM out of the load-bearing, tested refinement loop; no non-determinism leaks into parent choice.
+- **D6′ — Judge re-rank reach (revised during planning):** the judge **surfaces** its ranking + `winner` + rationale in its agent event only; it does **not** re-sort stored `batch.candidates`. The store exposes a single ordering (`_rankings`, keyed on `technical_score`) read by every consumer incl. refinement parent selection, so a "display-only" reorder isn't cleanly separable — and not reordering removes all determinism risk and keeps the LLM out of the tested refinement loop. Board reorder off the judge event is a **Phase 2.5** follow-up.
 - **D7 — UI rationale:** defer a dedicated surface to Phase 2.5. In deep mode the critic favorite + judge decision already ride in each agent's `agent.step` message, which the Agent Room renders as `lastMessage` — so rationale is minimally visible for free. A tooltip/expansion is polish, not a blocker.
 
 ## 11. Task breakdown (TDD — for the follow-up plan)
 
 1. **`lens_critique()` + `judge_panel()`** in `llm_agents.py` with `_fallback`/`_llm`/public split. Hermetic unit tests: live (mocked client) returns `source="llm"`; no-inference returns `source="fallback"` == `_lens_score` order; unparseable response ⇒ fallback.
 2. **`deep_mode_enabled()`** in `config.py`/`llm_agents.py` + tests for the gating truth table and the fail-loud-on-unavailable warning.
-3. **Wire into `conductor._emit_panel_events`**: deep path calls the new agents and applies the judge reorder; deterministic path unchanged. Hermetic tests (mock LLM, both stores) assert: events carry `source` + rationale; judge reorder applied; **deep-off keeps Phase 1 behavior and golden order**.
+3. **Wire into `conductor._emit_panel_events`**: deep path calls the new agents; deterministic path unchanged. Hermetic tests (mock LLM, both stores) assert: events carry `source` + rationale + ranking; **deep-off keeps Phase 1 behavior and golden order**.
 4. **Weave check** (manual, real key): lens critics + judge show model calls nested under their agents.
 5. **Weave eval**: deep vs deterministic ranking agreement on a fixed brief set (fills the parent-spec "paired counterfactual" gap).
 6. **(Optional, O3)** Agent Room: show critic rationale + judge decision.
@@ -156,7 +156,7 @@ The lens critics **consume** the per-candidate `critic` rationale where present 
 ## 12. Done criteria
 
 - Deep mode **off** (default): full suite + golden render byte-identical; ranking order unchanged. (Proves zero regression.)
-- Deep mode **on** (hermetic, mocked): lens critics emit `source="llm"` verdicts; judge reorder applied and recorded; one failed lens degrades to fallback without sinking the panel.
+- Deep mode **on** (hermetic, mocked): lens critics + judge emit `source="wandb_inference"` verdicts with rationale + ranking recorded on their events; one failed lens degrades to fallback without sinking the panel.
 - `REZN_DEEP_MODE=1` with no inference ⇒ deterministic panel + visible warning event (fail loud).
 - Real-key run: Weave Agents view shows the 3 critics + judge each making a model call.
 - Codex review of the full Phase 2 diff vs `main`; findings addressed.
@@ -165,5 +165,5 @@ The lens critics **consume** the per-candidate `critic` rationale where present 
 
 - **Latency:** +4 sequential calls/batch. Mitigation: the 3 lens calls can run concurrently (they're independent) before the judge; cap tokens/timeouts.
 - **Non-determinism leaking into CI:** mitigated by deep-mode-off default + hermetic mocked tests; no ordering assertions run in deep mode.
-- **Judge reorder confusing refinement:** mitigated by O2 default (display/winner only; leave parent selection on `composite_score`).
+- **Judge influencing refinement:** eliminated by D6′ — the judge never re-sorts stored candidates, so refinement parent selection (on `technical_score`/`composite_score`) is wholly unaffected.
 - **Prompt/JSON fragility:** mitigated by reusing `_parse_json_object` + coercion/clamping and per-lens fallback.
