@@ -130,6 +130,10 @@ GENRE_KITS: dict[str, DrumKit] = {
     "funk":       DrumKit("funk",      KickSpec(decay=0.18, drive=0.10), SnareSpec(noise_mix=0.65, tone_mix=0.45), HatSpec(decay=0.04, brightness=0.3)),
     "dnb":        DrumKit("breaky",    KickSpec(decay=0.16, drive=0.15), SnareSpec(noise_mix=0.80, tone_mix=0.30), HatSpec(decay=0.025, brightness=0.55)),
     "ambient":    DrumKit("soft",      KickSpec(decay=0.20), SnareSpec(noise_mix=0.50), HatSpec(decay=0.05, brightness=0.0)),
+    "jazz":       DrumKit("brushes",   KickSpec(decay=0.20, drive=0.0), SnareSpec(noise_mix=0.45, tone_mix=0.55), HatSpec(decay=0.05, brightness=0.1)),
+    "blues":      DrumKit("shuffle",   KickSpec(decay=0.20, drive=0.08), SnareSpec(noise_mix=0.55, tone_mix=0.50), HatSpec(decay=0.06, brightness=0.2)),
+    "soul":       DrumKit("warm_kit",  KickSpec(decay=0.20, drive=0.08), SnareSpec(noise_mix=0.60, tone_mix=0.45), HatSpec(decay=0.045, brightness=0.25)),
+    "reggae":     DrumKit("one_drop",  KickSpec(decay=0.24, drive=0.05), SnareSpec(noise_mix=0.55, tone_mix=0.50), HatSpec(decay=0.04, brightness=0.2)),
 }
 
 # Per-strategy bias applied on top of the genre family (feature deltas; clamped on use).

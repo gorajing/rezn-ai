@@ -67,6 +67,16 @@ def test_genre_kits_within_feature_bounds():
             assert spec.min <= fv <= spec.max, (name, fk, fv)
 
 
+def test_all_detected_genres_have_a_kit_family():
+    """Every genre detect_genre() can return must have an explicit kit family,
+    else it silently falls back to kernel drums (not genre-aware) (Codex)."""
+    from rezn_ai.music.composition import _GENRE_KEYWORDS
+
+    detected = {genre for _, genre in _GENRE_KEYWORDS}
+    missing = detected - set(GENRE_KITS)
+    assert not missing, f"detected genres without a kit family: {sorted(missing)}"
+
+
 def test_electronic_kit_is_punchier_than_kernel():
     # A non-default strategy with no detected genre falls back to the electronic family.
     kit = resolve_kit(genre=None, strategy="groove_architect", energy=0.5, seed=1)
