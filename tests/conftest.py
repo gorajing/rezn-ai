@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import os
 
-# Keep the suite hermetic: no real Redis, no W&B network, no live inference — even
-# when the developer has a populated .env (initialize_weave() loads .env, so we
-# pre-set empty creds here; load_project_env only fills vars NOT already present).
+# Keep the suite hermetic: no real Redis, no W&B network, no live inference.
 # Set before importing the app module / anything that calls initialize_weave.
+#
+# The W&B network/inference credentials are FORCE-cleared (assignment, not
+# setdefault): a developer who exports WANDB_API_KEY in their shell (or whose
+# .env is loaded by `uv run --env-file`) would otherwise leak a live wandb.ai
+# session and real inference into the suite. A test that genuinely needs real
+# creds opts in by setting them in its own body at call time.
 os.environ.setdefault("REZN_DISABLE_REDIS", "1")
 os.environ.setdefault("REZN_PRODUCTION", "0")
 os.environ.setdefault("REDIS_REQUIRED", "0")
 os.environ.setdefault("AGENT_MEMORY_REQUIRED", "0")
 os.environ.setdefault("REZN_INFERENCE_REQUIRED", "0")
-os.environ.setdefault("WANDB_API_KEY", "")          # -> initialize_weave() no-ops, never hits wandb.ai
-os.environ.setdefault("WANDB_INFERENCE_API_KEY", "")
+os.environ["WANDB_API_KEY"] = ""              # -> initialize_weave() no-ops, never hits wandb.ai
+os.environ["WANDB_INFERENCE_API_KEY"] = ""    # -> no live W&B Inference calls
+os.environ.pop("WEAVE_PROJECT", None)         # drop any custom project; code default applies
 os.environ.setdefault("OPENAI_API_KEY", "")
 os.environ.setdefault("REZN_ENABLE_INFERENCE", "0")  # deterministic agents, no live LLM calls
-os.environ.setdefault("WANDB_MODE", "disabled")      # belt-and-suspenders: keep wandb fully offline
+os.environ["WANDB_MODE"] = "disabled"         # belt-and-suspenders: keep wandb fully offline
 os.environ.setdefault("AGENT_MEMORY_URL", "")        # -> taste memory uses the local fallback, no network
 
 import fakeredis
