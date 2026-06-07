@@ -45,6 +45,13 @@ def test_resolve_kit_name_reflects_resolved_family():
     assert resolve_kit(genre="house", strategy="groove_architect", energy=0.5, seed=1).name == "house:groove_architect"
 
 
+def test_resolve_kit_normalizes_genre_case():
+    """Explicit genre is case-normalized (like resolve_style), so 'House' uses the
+    house kit, not a kernel fallback (Codex)."""
+    assert resolve_kit(genre="House", strategy="groove_architect", energy=0.5, seed=1) == \
+        resolve_kit(genre="house", strategy="groove_architect", energy=0.5, seed=1)
+
+
 def test_resolve_kit_deterministic_and_distinct_per_strategy():
     a = resolve_kit(genre=None, strategy="groove_architect", energy=0.5, seed=1)
     b = resolve_kit(genre=None, strategy="texture_builder", energy=0.5, seed=1)

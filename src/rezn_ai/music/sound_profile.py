@@ -182,7 +182,7 @@ def resolve_kit(*, genre: str | None, strategy: str, energy: float, seed: int) -
     so the default render stays byte-identical."""
     if strategy == "default":
         return DrumKit.kernel()
-    family = genre or "electronic"  # techno/electronic detect as None -> electronic family
+    family = (genre or "electronic").lower()  # case-normalized, like resolve_style
     base = GENRE_KITS.get(family, DrumKit.kernel())
     feats = _kit_features(base)
     for key, delta in STRATEGY_KIT_BIAS.get(strategy, {}).items():

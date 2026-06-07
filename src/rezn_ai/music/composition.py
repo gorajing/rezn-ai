@@ -248,9 +248,9 @@ def detect_genre(prompt: str | None) -> str | None:
 
     Deterministic word-start match (leading word boundary), first keyword wins: a
     keyword only matches at the start of a word, so "house" no longer matches inside
-    "warehouse", while morphological suffixes still match ("funky" -> funk,
-    "synthwave" -> synth). Unrecognised prompts (incl. techno/electronic) return
-    None, leaving the kernel groove unchanged.
+    "warehouse", while morphological suffixes still match (e.g. "funky" -> funk).
+    Unrecognised prompts (incl. techno/electronic) return None, leaving the kernel
+    groove unchanged.
     """
     if not prompt:
         return None
