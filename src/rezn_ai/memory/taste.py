@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from ..config import agent_memory_required, is_truthy
 from ..generation.strategies import STRATEGIES
 from ..models import CreativeBrief
 
@@ -153,10 +154,6 @@ def derive_bias(facts: list[TasteFact], *, brief: CreativeBrief) -> PlanningBias
     )
 
 
-def _is_truthy(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 class AgentMemoryUnavailable(RuntimeError):
     """Raised when the real Agent Memory backend is required but not usable."""
 
@@ -174,10 +171,15 @@ def build_taste_memory(store: Any) -> TasteMemory:
     """
     from .local import LocalTasteMemory
 
-    if _is_truthy(os.getenv("REZN_DISABLE_REDIS")):
+    if is_truthy(os.getenv("REZN_DISABLE_REDIS")):
+        if agent_memory_required():
+            raise AgentMemoryUnavailable(
+                "REZN_DISABLE_REDIS is test-only and cannot be combined with "
+                "AGENT_MEMORY_REQUIRED or REZN_PRODUCTION."
+            )
         return LocalTasteMemory(store)
 
-    required = _is_truthy(os.getenv("AGENT_MEMORY_REQUIRED"))
+    required = agent_memory_required()
     url = (os.getenv("AGENT_MEMORY_URL") or "").strip()
     store_id = (os.getenv("AGENT_MEMORY_STORE_ID") or "").strip()
     api_key = (os.getenv("AGENT_MEMORY_API_KEY") or "").strip()

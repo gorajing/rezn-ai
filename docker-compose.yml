@@ -25,9 +25,16 @@ services:
     environment:
       # Inside the compose network Redis is reachable as "redis".
       REDIS_URL: redis://redis:6379/0
-      # When the agent-memory profile is up, reach it by its service name. Harmless
-      # otherwise (the API just uses the local taste fallback).
+      REDIS_REQUIRED: "true"
+      REZN_PRODUCTION: "true"
+      REZN_ENGINE: rezn
+      REZN_ENABLE_INFERENCE: "1"
+      REZN_INFERENCE_REQUIRED: "true"
+      AGENT_MEMORY_REQUIRED: "true"
+      # Agent Memory creds come from .env (Redis Cloud managed service).
       AGENT_MEMORY_URL: ${AGENT_MEMORY_URL:-}
+      AGENT_MEMORY_STORE_ID: ${AGENT_MEMORY_STORE_ID:-}
+      AGENT_MEMORY_API_KEY: ${AGENT_MEMORY_API_KEY:-}
     volumes:
       # Persist generated artifacts/runs across restarts.
       - ./artifacts:/app/artifacts

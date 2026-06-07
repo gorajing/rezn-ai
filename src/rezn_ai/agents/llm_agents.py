@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 
 from ..music.brief_parser import parse_musical_brief
 from ..music.theory import PITCH_CLASSES, normalize_key
+from ..config import inference_required
 from ..tracing.weave_client import weave_op
 from .schemas import CreativeBrief
 
@@ -170,10 +171,17 @@ def propose_plan(brief: CreativeBrief, strategy: str) -> PlanProposal:
     """Propose creative nudges for a candidate (W&B Inference, deterministic fallback)."""
     fallback = _fallback_plan(strategy)
     if not inference_enabled():
+        if inference_required():
+            raise RuntimeError(
+                "Live inference is required (REZN_PRODUCTION or REZN_INFERENCE_REQUIRED) "
+                "but REZN_ENABLE_INFERENCE is off or no API key is configured."
+            )
         return fallback
     try:
         return _llm_propose_plan(brief, strategy)
-    except Exception as exc:  # best-effort enrichment; degrade to deterministic plan
+    except Exception as exc:
+        if inference_required():
+            raise RuntimeError(f"Live inference failed for propose_plan: {exc}") from exc
         return PlanProposal(**{**asdict(fallback), "source": f"fallback:{type(exc).__name__}"})
 
 
@@ -241,10 +249,17 @@ def critique(arrangement: dict, metrics: dict, brief: CreativeBrief) -> Critique
     """Score a finished candidate (W&B Inference, deterministic fallback)."""
     fallback = _fallback_critique(arrangement, metrics)
     if not inference_enabled():
+        if inference_required():
+            raise RuntimeError(
+                "Live inference is required (REZN_PRODUCTION or REZN_INFERENCE_REQUIRED) "
+                "but REZN_ENABLE_INFERENCE is off or no API key is configured."
+            )
         return fallback
     try:
         return _llm_critique(arrangement, metrics, brief)
-    except Exception as exc:  # best-effort enrichment; degrade to deterministic critic
+    except Exception as exc:
+        if inference_required():
+            raise RuntimeError(f"Live inference failed for critique: {exc}") from exc
         return CritiqueResult(
             critic_score=fallback.critic_score,
             reasons=fallback.reasons + (f"llm_error:{type(exc).__name__}",),
@@ -320,8 +335,15 @@ def interpret_brief(
         source="fallback",
     )
     if not inference_enabled():
+        if inference_required():
+            raise RuntimeError(
+                "Live inference is required (REZN_PRODUCTION or REZN_INFERENCE_REQUIRED) "
+                "but REZN_ENABLE_INFERENCE is off or no API key is configured."
+            )
         return fallback
     try:
         return _llm_interpret(prompt, fb)
-    except Exception as exc:  # best-effort; degrade to the deterministic interpretation
+    except Exception as exc:
+        if inference_required():
+            raise RuntimeError(f"Live inference failed for interpret_brief: {exc}") from exc
         return BriefInterpretation(**{**asdict(fallback), "source": f"fallback:{type(exc).__name__}"})

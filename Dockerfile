@@ -20,5 +20,6 @@ RUN mkdir -p runs artifacts
 
 EXPOSE 8000
 
-# Honors REDIS_URL, WANDB_API_KEY, REZN_ENABLE_INFERENCE, REZN_CORS_ORIGINS from env.
+# Honors REZN_PRODUCTION, REDIS_URL, AGENT_MEMORY_*, WANDB_API_KEY,
+# REZN_ENABLE_INFERENCE, REZN_INFERENCE_REQUIRED, REZN_CORS_ORIGINS from env.
 CMD ["uvicorn", "rezn_ai.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

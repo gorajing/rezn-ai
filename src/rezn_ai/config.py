@@ -1,6 +1,10 @@
-"""Project-level constants."""
+"""Project constants and deployment posture flags."""
 
 from __future__ import annotations
+
+import os
+
+# ── Project layout ────────────────────────────────────────────────────────────
 
 DEFAULT_RUNS_DIR = "runs"
 DEFAULT_MIDI_DIR = "midi"
@@ -9,3 +13,52 @@ MANIFEST_NAME = "manifest.json"
 ARRANGEMENT_NAME = "arrangement.json"
 NOTES_NAME = "notes.md"
 
+# ── Deployment posture ────────────────────────────────────────────────────────
+#
+# ``REZN_PRODUCTION=true`` is the master switch for deploy/live use. Individual
+# ``*_REQUIRED`` flags still work on their own for partial strictness during dev.
+#
+# The hermetic test suite sets ``REZN_DISABLE_REDIS=1`` before import; validation
+# is skipped in that mode so pytest never needs Redis Cloud or Agent Memory.
+
+
+def is_truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def production_mode() -> bool:
+    return is_truthy(os.getenv("REZN_PRODUCTION"))
+
+
+def redis_required() -> bool:
+    return production_mode() or is_truthy(os.getenv("REDIS_REQUIRED"))
+
+
+def agent_memory_required() -> bool:
+    return production_mode() or is_truthy(os.getenv("AGENT_MEMORY_REQUIRED"))
+
+
+def inference_required() -> bool:
+    return production_mode() or is_truthy(os.getenv("REZN_INFERENCE_REQUIRED"))
+
+
+def validate_deployment() -> None:
+    """Fail fast at API startup when production posture is violated."""
+    if is_truthy(os.getenv("REZN_DISABLE_REDIS")):
+        return  # hermetic tests — never block the suite
+
+    errors: list[str] = []
+
+    if production_mode():
+        if os.getenv("REZN_ENGINE", "rezn").strip().lower() == "local":
+            errors.append("REZN_ENGINE=local is not allowed when REZN_PRODUCTION=true (use rezn)")
+        from .agents.llm_agents import inference_enabled
+
+        if not inference_enabled():
+            errors.append(
+                "REZN_PRODUCTION=true requires live inference "
+                "(REZN_ENABLE_INFERENCE=1 and WANDB_API_KEY or OPENAI_API_KEY)"
+            )
+
+    if errors:
+        raise RuntimeError("Production deployment misconfigured:\n  • " + "\n  • ".join(errors))

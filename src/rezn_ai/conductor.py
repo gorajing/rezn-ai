@@ -15,6 +15,7 @@ import weave
 
 from .agents.harness import APPROVE_BONUS, BASE_WEIGHT, MIN_WEIGHT, REJECT_PENALTY, _allocate
 from .agents.llm_agents import interpret_brief
+from .config import agent_memory_required
 from .generation.engine import CandidateResult, GeneratorEngine
 from .memory.local import LocalTasteMemory
 from .memory.taste import TasteMemory
@@ -40,10 +41,14 @@ class BatchConductor:
         self.store = store
         self.engine = engine
         self.artifacts_root = Path(artifacts_root)
-        # Default to the dependency-free local backend (no network probe), so the
-        # API and the hermetic test suite both construct a conductor cheaply. The
-        # API injects a real Agent Memory backend when one is configured.
+        # Default to the dependency-free local backend only in dev/tests. Production
+        # injects a real Agent Memory client via the API factory.
         self.taste: TasteMemory = taste or LocalTasteMemory(store)
+        if agent_memory_required() and isinstance(self.taste, LocalTasteMemory):
+            raise RuntimeError(
+                "LocalTasteMemory is not allowed when AGENT_MEMORY_REQUIRED or "
+                "REZN_PRODUCTION is set — configure the Redis Cloud Agent Memory service."
+            )
         self.producer_id = os.getenv("AGENT_MEMORY_PRODUCER_ID", "default")
 
     def _record_taste(self, candidate: Candidate, action: str, note: str = "") -> None:
@@ -60,8 +65,9 @@ class BatchConductor:
                         f"Recorded {action} of {candidate.strategy} into taste memory.",
                         {"candidate_id": candidate.candidate_id, "action": action,
                          "backend": self.taste.health().get("backend")})
-        except Exception:  # taste memory is enrichment; never break curation
-            pass
+        except Exception as exc:
+            if agent_memory_required():
+                raise RuntimeError(f"Taste memory write failed: {exc}") from exc
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 

@@ -7,6 +7,10 @@ import os
 # pre-set empty creds here; load_project_env only fills vars NOT already present).
 # Set before importing the app module / anything that calls initialize_weave.
 os.environ.setdefault("REZN_DISABLE_REDIS", "1")
+os.environ.setdefault("REZN_PRODUCTION", "0")
+os.environ.setdefault("REDIS_REQUIRED", "0")
+os.environ.setdefault("AGENT_MEMORY_REQUIRED", "0")
+os.environ.setdefault("REZN_INFERENCE_REQUIRED", "0")
 os.environ.setdefault("WANDB_API_KEY", "")          # -> initialize_weave() no-ops, never hits wandb.ai
 os.environ.setdefault("WANDB_INFERENCE_API_KEY", "")
 os.environ.setdefault("OPENAI_API_KEY", "")

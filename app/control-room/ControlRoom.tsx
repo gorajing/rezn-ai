@@ -94,9 +94,10 @@ export function ControlRoom() {
         const on = (k: string) => Boolean(d.checks[k]);
         setServices([
           { id: "engine", label: "REZN Engine", state: on("generator_engine") ? "ok" : "warn", detail: "Clean-room synthesis" },
-          { id: "redis", label: "Redis", state: on("redis") ? "live" : "warn", detail: on("redis") ? "Live batch state" : "In-memory fallback" },
+          { id: "redis", label: "Redis", state: on("redis") ? "live" : "warn", detail: on("redis") ? "Live batch state" : "Not connected" },
+          { id: "memory", label: "Agent Memory", state: on("agent_memory") ? "live" : "warn", detail: on("agent_memory") ? "Taste profile live" : "Not configured" },
           { id: "weave", label: "Weave", state: on("weave_tracing") ? "live" : "warn", detail: on("weave_tracing") ? "Tracing every step" : "Tracing off" },
-          { id: "inference", label: "W&B Inference", state: on("wandb_key") ? "ok" : "off", detail: on("wandb_key") ? "Composer / critic agents" : "Deterministic mode" },
+          { id: "inference", label: "W&B Inference", state: on("live_inference") ? "ok" : "off", detail: on("live_inference") ? "Composer / critic agents" : "Inference off" },
         ]);
       })
       .catch(() => pushEvent("warn", `API not reachable at ${API_BASE} — start the backend (uvicorn) on :8000`));

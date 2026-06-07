@@ -1,8 +1,8 @@
 """FastAPI entrypoint for the rezn-ai music generator.
 
 One brief fans out into ranked candidates; the operator approves / rejects /
-requests variants / selects a final. State lives in Redis (local or Redis Cloud)
-with an in-memory fallback. Preview audio is served from the /artifacts mount.
+requests variants / selects a final. State lives in Redis (Redis Cloud in
+production). Preview audio is served from the /artifacts mount.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from ..agents.llm_agents import inference_enabled
+from ..config import is_truthy, production_mode, redis_required, validate_deployment
 from ..conductor import BatchConductor
 from ..generation.engine import LocalGeneratorEngine
 from ..generation.rezn_engine import ReznGeneratorEngine
@@ -44,19 +45,20 @@ ARTIFACTS_ROOT = REPO_ROOT / "artifacts"
 ARTIFACTS_ROOT.mkdir(parents=True, exist_ok=True)
 
 
-def _is_truthy(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _build_store() -> InMemoryStore | Any:
     """
-    Connect to Redis (local or Redis Cloud) and fall back to InMemoryStore.
+    Connect to Redis (Redis Cloud or compose-local). In production there is no
+    in-memory fallback — set ``REDIS_REQUIRED=true`` or ``REZN_PRODUCTION=true``.
 
     - ``REDIS_URL`` / ``REDIS_HOST`` etc. select the target (see redis_url_from_env).
-    - ``REDIS_REQUIRED=true`` makes a failed connection raise instead of falling back.
-    - ``REZN_DISABLE_REDIS=true`` skips Redis entirely (used by the test suite).
+    - ``REZN_DISABLE_REDIS=true`` skips Redis entirely (test suite only).
     """
-    if _is_truthy(os.getenv("REZN_DISABLE_REDIS")):
+    if is_truthy(os.getenv("REZN_DISABLE_REDIS")):
+        if redis_required():
+            raise RuntimeError(
+                "REZN_DISABLE_REDIS is test-only and cannot be combined with "
+                "REDIS_REQUIRED or REZN_PRODUCTION."
+            )
         logger.info("REZN_DISABLE_REDIS set — using InMemoryStore")
         return InMemoryStore()
 
@@ -64,7 +66,7 @@ def _build_store() -> InMemoryStore | Any:
 
     redis_url = redis_url_from_env()
     safe_url = redact_url(redis_url)
-    required = _is_truthy(os.getenv("REDIS_REQUIRED"))
+    required = redis_required()
     try:
         store = RedisStore(redis_url=redis_url)
         if store.ping():
@@ -75,8 +77,8 @@ def _build_store() -> InMemoryStore | Any:
         reason = f"Redis init failed at {safe_url}: {exc}"
 
     if required:
-        raise RuntimeError(f"{reason} and REDIS_REQUIRED=true")
-    logger.warning("%s — falling back to InMemoryStore", reason)
+        raise RuntimeError(f"{reason} (REDIS_REQUIRED or REZN_PRODUCTION is set)")
+    logger.warning("%s — falling back to InMemoryStore (dev only; set REDIS_REQUIRED=true for production)", reason)
     return InMemoryStore()
 
 
@@ -107,9 +109,11 @@ app.add_middleware(
 app.mount("/artifacts", StaticFiles(directory=ARTIFACTS_ROOT), name="artifacts")
 
 def _build_engine() -> Any:
-    """Default to the clean-room engine (our synth + discriminating scorer); set
-    ``REZN_ENGINE=local`` for the simpler in-repo LocalGeneratorEngine."""
+    """Default to the clean-room engine (``REZN_ENGINE=rezn``). The placeholder
+    ``LocalGeneratorEngine`` is blocked when ``REZN_PRODUCTION=true``."""
     if os.getenv("REZN_ENGINE", "rezn").strip().lower() == "local":
+        if production_mode():
+            raise RuntimeError("REZN_ENGINE=local is not allowed when REZN_PRODUCTION=true")
         logger.info("Using LocalGeneratorEngine (REZN_ENGINE=local)")
         return LocalGeneratorEngine()
     return ReznGeneratorEngine()
@@ -132,6 +136,7 @@ def _build_taste(store: Any) -> Any:
     return taste
 
 
+validate_deployment()
 store = _build_store()
 engine = _build_engine()
 taste = _build_taste(store)
@@ -153,6 +158,7 @@ def doctor() -> DoctorResponse:
     taste_backend = taste_health.get("backend")
     agent_memory_live = taste_backend == "agent_memory" and bool(taste_health.get("reachable"))
     inference_live = inference_enabled()
+    prod = production_mode()
     checks = {
         "weave_import": True,
         "weave_project": bool(os.getenv("WEAVE_PROJECT") or os.getenv("WANDB_PROJECT")),
@@ -160,6 +166,7 @@ def doctor() -> DoctorResponse:
         "wandb_key": bool(os.getenv("WANDB_API_KEY")),
         "openai_key": bool(os.getenv("OPENAI_API_KEY")),
         "generator_engine": True,
+        "production_mode": prod,
         "live_inference": inference_live,
         "artifacts_writable": os.access(ARTIFACTS_ROOT, os.W_OK),
         "redis": redis_ok,
@@ -170,18 +177,23 @@ def doctor() -> DoctorResponse:
     }
     core_ok = checks["weave_import"] and checks["generator_engine"] and checks["artifacts_writable"]
     notes = [
+        "Production posture: " + ("on (REZN_PRODUCTION=true — no local fallbacks)."
+                                  if prod else
+                                  "off — set REZN_PRODUCTION=true for deploy/live use."),
         "Generator runs fully offline — every note is from documented math, no samples, no DAW.",
         "Redis: " + ("ranked candidates, batch events, and per-candidate state are live."
                      if redis_ok else
-                     "not connected — using InMemoryStore. Point REDIS_URL at Redis Cloud to enable shared live state."),
+                     ("not connected — startup should have failed (REDIS_REQUIRED/REZN_PRODUCTION)."
+                      if redis_required() else
+                      "not connected — dev-only InMemoryStore. Set REDIS_URL + REDIS_REQUIRED=true for production.")),
         "Set WANDB_API_KEY to upload traces to W&B Weave.",
         "Live inference: " + ("on — critic/composer agents call W&B Inference."
                               if inference_live else
-                              "off — deterministic fallback. Set REZN_ENABLE_INFERENCE=1 for live agents."),
+                              "off — set REZN_ENABLE_INFERENCE=1 (required when REZN_PRODUCTION=true)."),
         f"Taste memory backend: {taste_backend} "
         + ("(Redis Cloud Agent Memory, reachable)." if agent_memory_live else
-           "— configure the Redis Cloud Agent Memory service (AGENT_MEMORY_URL, "
-           "AGENT_MEMORY_STORE_ID, AGENT_MEMORY_API_KEY) and set AGENT_MEMORY_REQUIRED=true for live taste recall."),
+           "— configure AGENT_MEMORY_URL, AGENT_MEMORY_STORE_ID, AGENT_MEMORY_API_KEY "
+           "(required when AGENT_MEMORY_REQUIRED or REZN_PRODUCTION is set)."),
     ]
     return DoctorResponse(ok=core_ok, checks=checks, notes=notes)
 
