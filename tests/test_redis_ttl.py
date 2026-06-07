@@ -20,8 +20,10 @@ from rezn_ai.storage.redis_store import (
     batch_key,
     candidate_key,
     feedback_key,
+    lessons_dedup_key,
     lessons_key,
     taste_decisions_key,
+    taste_profile_key,
     taste_profile_weights_key,
     taste_prompt_arms_key,
 )
@@ -59,18 +61,46 @@ def test_ephemeral_keys_get_positive_ttl():
         assert s._r.ttl(key) > 0, f"{key} should carry a positive TTL"
 
 
+def test_appending_an_event_slides_the_batch_record_ttl():
+    """The whole run-state must expire TOGETHER: touching a batch via an event must
+    slide the batch record's TTL too, or the root expires out from under live
+    candidates and get_batch raises KeyError on a batch whose children are alive."""
+    s = _store(state_ttl_seconds=600)
+    s.save_batch(Batch(batch_id="b1", brief=_brief()))
+    s._r.expire(batch_key("b1"), 30)  # simulate the batch record nearing expiry
+    assert s._r.ttl(batch_key("b1")) <= 30
+    s.append_event("b1", BatchEvent(type="candidate.approved", message="x"))
+    assert s._r.ttl(batch_key("b1")) > 30  # curation slid it back to the full window
+
+
+def test_saving_a_candidate_slides_its_batch_record_ttl():
+    """Saving a candidate during curation must keep its parent batch record alive."""
+    s = _store(state_ttl_seconds=600)
+    s.save_batch(Batch(batch_id="b2", brief=_brief()))
+    s._r.expire(batch_key("b2"), 30)
+    s.save_candidate(_candidate("b2", "c1"))
+    assert s._r.ttl(batch_key("b2")) > 30
+
+
 def test_policy_keys_never_expire():
     """The learned policy IS the memory — it must never get a TTL."""
     s = _store(state_ttl_seconds=604800)
     s.save_taste_vector("p1", {"kick.drive": 0.3}, count=2)
     s.update_prompt_arm("p1", "groove_architect:A1", 1.0)
     s.append_decision("p1", {"batch_id": "b1", "reason": "punchier"})
-    s.remember(MemoryLesson(body="strong"), improvement_delta=0.5)
+    # The learned policy also lives in the profile store (the contrastive-learning
+    # accumulator + evolved prompt arms) and the lessons dedup index — all durable.
+    s.save_profile("p1", "acc_delta", {"kick.drive": 0.1})
+    s.save_profile("p1", "arm:groove_architect", {"arm": "groove_architect:A1"})
+    s.remember(MemoryLesson(body="strong", dedup_key="curation:c1"), improvement_delta=0.5)
     for key in (
         taste_profile_weights_key("p1"),
         taste_prompt_arms_key("p1"),
         taste_decisions_key("p1"),
+        taste_profile_key("p1", "acc_delta"),
+        taste_profile_key("p1", "arm:groove_architect"),
         lessons_key(),
+        lessons_dedup_key(),
     ):
         assert s._r.ttl(key) == -1, f"{key} (learned policy) must never expire"
 

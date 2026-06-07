@@ -309,7 +309,9 @@ class RedisStore:
             "ts": event.ts,
             "payload": json.dumps(event.payload),
         }, maxlen=self._event_stream_maxlen, approximate=False)
-        self._expire(key)
+        # Slide the batch record's TTL too: the whole run-state must expire together,
+        # or the root record could lapse while its still-active children keep sliding.
+        self._expire(key, batch_key(batch_id))
         return self.get_batch(batch_id)
 
     def _read_events(self, batch_id: str) -> list[BatchEvent]:
@@ -331,7 +333,12 @@ class RedisStore:
         self._r.hset(candidate_key(candidate.candidate_id), mapping=_candidate_to_mapping(candidate))
         # Sorted set = ranking by technical_score (best first via ZREVRANGE).
         self._r.zadd(batch_candidates_key(candidate.batch_id), {candidate.candidate_id: candidate.technical_score})
-        self._expire(candidate_key(candidate.candidate_id), batch_candidates_key(candidate.batch_id))
+        # Sliding the parent batch record too keeps the whole run-state coherent.
+        self._expire(
+            candidate_key(candidate.candidate_id),
+            batch_candidates_key(candidate.batch_id),
+            batch_key(candidate.batch_id),
+        )
         return candidate
 
     def get_candidate(self, candidate_id: str) -> Candidate:
