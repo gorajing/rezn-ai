@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from rezn_ai.conductor import BatchConductor
 from rezn_ai.generation.rezn_engine import ReznGeneratorEngine
 from rezn_ai.models import BatchCreateRequest, CreativeBrief, MemoryLesson
@@ -131,6 +133,32 @@ def test_approve_then_final_records_one_curation_per_candidate(tmp_path):
     cond.select_final(batch.batch_id, cid)
     for_cand = [c for c in spy.curations if c[1] == cid]
     assert len(for_cand) == 1
+
+
+def test_select_final_rejects_a_cross_batch_candidate(tmp_path):
+    """select_final must refuse a candidate that does not belong to the batch —
+    otherwise it finalizes a foreign candidate and points selected_final_id outside
+    the batch (Codex finding)."""
+    cond = _conductor(tmp_path)
+    b1 = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    b2 = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    foreign = b2.candidates[0].candidate_id
+    with pytest.raises(ValueError):
+        cond.select_final(b1.batch_id, foreign)
+    # The foreign candidate stays untouched.
+    assert cond.store.get_candidate(foreign).status != "final"
+
+
+def test_request_variant_refuses_a_finalized_candidate(tmp_path):
+    """'final' is terminal: requesting a variant must not downgrade it back to
+    'variant_requested' (Codex finding)."""
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cid = batch.candidates[0].candidate_id
+    cond.select_final(batch.batch_id, cid)
+    with pytest.raises(ValueError):
+        cond.request_variant(cid)
+    assert cond.store.get_candidate(cid).status == "final"  # not downgraded
 
 
 def test_approve_is_safe_without_weave(tmp_path):

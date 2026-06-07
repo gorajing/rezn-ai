@@ -119,6 +119,25 @@ def test_select_final(client) -> None:
     assert completed["selected_final_id"] == cid
 
 
+def test_variant_of_finalized_candidate_returns_400(client) -> None:
+    """'final' is terminal — requesting a variant of a finalized pick is a 400, not a 500."""
+    batch = _start(client)
+    batch_id = batch["batch_id"]
+    cid = batch["candidates"][0]["candidate_id"]
+    client.post(f"/api/batches/{batch_id}/select-final", json={"candidate_id": cid})
+    resp = client.post(f"/api/candidates/{cid}/variant", json={"note": "more"})
+    assert resp.status_code == 400
+
+
+def test_select_final_cross_batch_returns_400(client) -> None:
+    """select_final with a candidate from another batch is a 400, not a 500."""
+    b1 = _start(client)
+    b2 = _start(client)
+    foreign = b2["candidates"][0]["candidate_id"]
+    resp = client.post(f"/api/batches/{b1['batch_id']}/select-final", json={"candidate_id": foreign})
+    assert resp.status_code == 400
+
+
 # ── Refinement memory ───────────────────────────────────────────────────────────
 
 def test_lessons_recorded_after_approval(client) -> None:

@@ -238,6 +238,8 @@ def select_final(batch_id: str, request: SelectFinalRequest) -> Batch:
         return conductor.select_final(batch_id, request.candidate_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Batch or candidate not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ── Candidates ──────────────────────────────────────────────────────────────
@@ -272,6 +274,8 @@ def request_variant(candidate_id: str, request: FeedbackRequest) -> Candidate:
         return conductor.request_variant(candidate_id, request.note)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Candidate not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ── Refinement memory ───────────────────────────────────────────────────────

@@ -290,6 +290,10 @@ class BatchConductor:
     @weave_op("conductor.request_variant")
     def request_variant(self, candidate_id: str, note: str = "") -> Candidate:
         parent = self.store.get_candidate(candidate_id)
+        # 'final' is terminal — a finalized pick cannot be downgraded to
+        # 'variant_requested' by a stale request.
+        if parent.status == "final":
+            raise ValueError(f"cannot request a variant of finalized candidate {candidate_id}")
         parent.status = "variant_requested"
         if note:
             parent.feedback = note
@@ -311,6 +315,10 @@ class BatchConductor:
     def select_final(self, batch_id: str, candidate_id: str) -> Batch:
         batch = self.store.get_batch(batch_id)  # raises KeyError if missing
         candidate = self.store.get_candidate(candidate_id)
+        if candidate.batch_id != batch_id:
+            raise ValueError(
+                f"candidate {candidate_id} belongs to batch {candidate.batch_id}, not {batch_id}"
+            )
         already_counted = candidate.status in ("approved", "final")
         candidate.status = "final"
         self.store.save_candidate(candidate)
