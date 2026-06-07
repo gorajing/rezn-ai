@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import random
+import re
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
@@ -245,14 +246,17 @@ _GENRE_KEYWORDS: tuple[tuple[str, str], ...] = (
 def detect_genre(prompt: str | None) -> str | None:
     """Map a free-text brief to a known genre, or None for the native idiom.
 
-    Deterministic substring match, first keyword wins. Unrecognised prompts
-    (incl. techno/electronic) return None, leaving the kernel groove unchanged.
+    Deterministic word-start match (leading word boundary), first keyword wins: a
+    keyword only matches at the start of a word, so "house" no longer matches inside
+    "warehouse", while morphological suffixes still match ("funky" -> funk,
+    "synthwave" -> synth). Unrecognised prompts (incl. techno/electronic) return
+    None, leaving the kernel groove unchanged.
     """
     if not prompt:
         return None
     lowered = prompt.lower()
     for keyword, genre in _GENRE_KEYWORDS:
-        if keyword in lowered:
+        if re.search(rf"\b{re.escape(keyword)}", lowered):
             return genre
     return None
 

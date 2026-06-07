@@ -12,6 +12,7 @@ patches are written into arrangement.json so every render stays reproducible.
 from __future__ import annotations
 
 import hashlib
+import re
 
 PARTS = ("bass", "harmony", "texture")
 
@@ -111,6 +112,16 @@ def _pick(pool: list[str], seed: int, strategy: str, part: str) -> str:
     return pool[-1]
 
 
+def _genre_family(text: str) -> str | None:
+    """Genre keyword -> palette family, longest keyword first, matched at a word
+    start (leading word boundary) so e.g. "house" does not match inside "warehouse".
+    ``text`` must already be lowercased."""
+    for keyword, family in sorted(_GENRE_FAMILY.items(), key=lambda kv: -len(kv[0])):
+        if re.search(rf"\b{re.escape(keyword)}", text):
+            return family
+    return None
+
+
 def select_voices(
     prompt: str, *, seed: int, energy: float = 0.5, strategy: str = "default"
 ) -> dict[str, str]:
@@ -118,10 +129,7 @@ def select_voices(
     varied per candidate by ``seed``. ``part`` is one of ``PARTS``."""
     text = (prompt or "").lower()
 
-    family = next(
-        (fam for g, fam in sorted(_GENRE_FAMILY.items(), key=lambda kv: -len(kv[0])) if g in text),
-        None,
-    )
+    family = _genre_family(text)
     pools = (
         {part: list(_FAMILIES[family][part]) for part in PARTS}
         if family is not None
