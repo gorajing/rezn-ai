@@ -33,8 +33,22 @@ _DENSITY_UP = re.compile(
     re.IGNORECASE,
 )
 _DENSITY_DOWN = re.compile(
-    r"\b(sparse|too sparse|thin|minimal|calmer|quieter|less busy|lighter|"
+    r"\b(sparse|thin|minimal|calmer|quieter|less busy|lighter|"
     r"more space|stripped)\b",
+    re.IGNORECASE,
+)
+# Complaint patterns ("too X") invert the bare keyword's polarity: "too sparse"
+# means the producer wants it DENSER (energy up); "too busy"/"too dense" means
+# they want it SPARSER (energy down). These are stripped from the bare-keyword
+# text before the bare pass so "too sparse" can't also trip _DENSITY_DOWN.
+_TOO_SPARSE = re.compile(
+    r"\btoo\s+(sparse|thin|minimal|empty|quiet|light|stripped|bare|skeletal|"
+    r"sparse on drums)\b",
+    re.IGNORECASE,
+)
+_TOO_BUSY = re.compile(
+    r"\btoo\s+(busy|dense|cluttered|crowded|much|heavy|loud|full|thick|noisy|"
+    r"busy on drums)\b",
     re.IGNORECASE,
 )
 _TEMPO_UP = re.compile(r"\b(faster|uptempo|driving|more energy|pick up)\b", re.IGNORECASE)
@@ -74,10 +88,16 @@ def nudges_from_guidance(
 
     if text.strip():
         sources.append("guidance")
-        if _DENSITY_UP.search(text):
+        # Complaints ("too sparse"/"too busy") invert the bare keyword. Detect them
+        # first, then strip their spans so the bare pass can't double-count the same
+        # word with the opposite sign (e.g. "too sparse" must net DENSER, not zero).
+        too_sparse = bool(_TOO_SPARSE.search(text))
+        too_busy = bool(_TOO_BUSY.search(text))
+        bare = _TOO_BUSY.sub(" ", _TOO_SPARSE.sub(" ", text))
+        if too_sparse or _DENSITY_UP.search(bare):
             energy += 0.12
             seed += 17
-        if _DENSITY_DOWN.search(text):
+        if too_busy or _DENSITY_DOWN.search(bare):
             energy -= 0.10
             seed += 29
         if _TEMPO_UP.search(text):
