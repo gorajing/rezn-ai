@@ -2,6 +2,14 @@
 
 import type { ActivityEvent, BriefControls, ChatMessage } from "./types";
 
+export const STRATEGIES: { key: string; label: string; blurb: string }[] = [
+  { key: "groove_architect", label: "Groove Architect", blurb: "Locks a hypnotic rhythmic spine" },
+  { key: "harmony_driver", label: "Harmony Driver", blurb: "Leads with tense chordal motion" },
+  { key: "texture_builder", label: "Texture Builder", blurb: "Layers evolving atmospheric pads" },
+  { key: "energy_curve", label: "Energy Curve", blurb: "Shapes a dynamic build and release" },
+  { key: "wildcard_mutator", label: "Wildcard Mutator", blurb: "Takes a bold left-field risk" },
+];
+
 export const DEFAULT_BRIEF: BriefControls = {
   key: "F#",
   mode: "minor",

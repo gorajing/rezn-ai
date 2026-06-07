@@ -6,7 +6,7 @@ import { Waveform } from "./Waveform";
 import { ScoreRing } from "./ScoreRing";
 import { ScoreBreakdown } from "./ScoreBreakdown";
 import { CheckIcon, PauseIcon, PlayIcon, StarIcon, TraceIcon, WandIcon, XIcon } from "./icons";
-import { STRATEGIES } from "../mock-data";
+import { STRATEGIES } from "../ui-defaults";
 
 // Strategy signature ("what makes this take distinct"), surfaced under the label.
 const STRATEGY_BLURB: Record<string, string> = Object.fromEntries(
