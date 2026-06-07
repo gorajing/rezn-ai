@@ -7,6 +7,7 @@ replaced is gone — see docs/adr/0002-generator-over-mix-conductor.md.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,8 @@ import weave
 
 from .agents.harness import APPROVE_BONUS, BASE_WEIGHT, MIN_WEIGHT, REJECT_PENALTY, _allocate
 from .generation.engine import CandidateResult, GeneratorEngine
+from .memory.local import LocalTasteMemory
+from .memory.taste import TasteMemory
 from .tracing.weave_client import weave_workspace_url
 from .models import (
     Batch,
@@ -26,10 +29,38 @@ from .models import (
 
 
 class BatchConductor:
-    def __init__(self, store: Any, engine: GeneratorEngine, artifacts_root: Path) -> None:
+    def __init__(
+        self,
+        store: Any,
+        engine: GeneratorEngine,
+        artifacts_root: Path,
+        taste: TasteMemory | None = None,
+    ) -> None:
         self.store = store
         self.engine = engine
         self.artifacts_root = Path(artifacts_root)
+        # Default to the dependency-free local backend (no network probe), so the
+        # API and the hermetic test suite both construct a conductor cheaply. The
+        # API injects a real Agent Memory backend when one is configured.
+        self.taste: TasteMemory = taste or LocalTasteMemory(store)
+        self.producer_id = os.getenv("AGENT_MEMORY_PRODUCER_ID", "default")
+
+    def _record_taste(self, candidate: Candidate, action: str, note: str = "") -> None:
+        """Append a curation decision to the producer's taste profile (best-effort)."""
+        try:
+            self.taste.remember_curation(
+                producer_id=self.producer_id,
+                session_id=candidate.batch_id,
+                action=action,
+                candidate=candidate,
+                note=note,
+            )
+            self._event(candidate.batch_id, "taste.remembered",
+                        f"Recorded {action} of {candidate.strategy} into taste memory.",
+                        {"candidate_id": candidate.candidate_id, "action": action,
+                         "backend": self.taste.health().get("backend")})
+        except Exception:  # taste memory is enrichment; never break curation
+            pass
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -75,15 +106,24 @@ class BatchConductor:
             {"candidate_count": brief.candidate_count, "key": brief.key, "mode": brief.mode, "tempo": brief.tempo},
         )
 
-        memories = self.store.recall_top_lessons(5)
-        if memories:
+        recall = self.taste.recall_taste(producer_id=self.producer_id, brief=brief)
+        bias = recall.bias
+        if recall.facts:
             self._event(
-                batch_id, "memory.recalled",
-                f"Seeded refinement memory with {len(memories)} prior lesson(s).",
-                {"count": len(memories)},
+                batch_id, "taste.recalled",
+                (f"Recalled {len(recall.facts)} taste signal(s); "
+                 f"bias: {', '.join(bias.notes) if bias.notes else 'none actionable'}."),
+                {
+                    "facts": len(recall.facts),
+                    "notes": bias.notes,
+                    "strategy_boosts": bias.strategy_boosts,
+                    "tempo_delta": bias.tempo_delta,
+                    "mode_pref": bias.mode_pref,
+                    "sources": bias.sources,
+                },
             )
 
-        results = self.engine.orchestrate_batch(brief, batch_id, self.artifacts_root)
+        results = self.engine.orchestrate_batch(brief, batch_id, self.artifacts_root, bias=bias)
         for result in results:
             candidate = self._to_candidate(result, batch_id)
             self.store.save_candidate(candidate)
@@ -114,6 +154,7 @@ class BatchConductor:
         self.store.save_candidate(candidate)
         self.store.save_feedback(candidate_id, {"decision": "approved"})
         self._remember(candidate, approved=True)
+        self._record_taste(candidate, "approved")
         self._event(candidate.batch_id, "candidate.approved",
                     f"Approved {candidate.strategy} candidate.", {"candidate_id": candidate_id})
         return candidate
@@ -126,6 +167,7 @@ class BatchConductor:
         self.store.save_candidate(candidate)
         self.store.save_feedback(candidate_id, {"decision": "rejected", "note": note})
         self._remember(candidate, approved=False, note=note)
+        self._record_taste(candidate, "rejected", note=note)
         self._event(candidate.batch_id, "candidate.rejected",
                     f"Rejected {candidate.strategy} candidate.", {"candidate_id": candidate_id, "note": note})
         return candidate
@@ -137,6 +179,7 @@ class BatchConductor:
         if note:
             parent.feedback = note
         self.store.save_candidate(parent)
+        self._record_taste(parent, "variant", note=note)
 
         batch = self.store.get_batch(parent.batch_id)
         salt = len(batch.candidates)
@@ -158,6 +201,7 @@ class BatchConductor:
         batch.status = "completed"
         self.store.save_batch(batch)
         self._remember(candidate, approved=True, final=True)
+        self._record_taste(candidate, "final")
         self._event(batch_id, "batch.final_selected",
                     f"Selected final candidate ({candidate.strategy}).", {"candidate_id": candidate_id})
         return self.store.get_batch(batch_id)

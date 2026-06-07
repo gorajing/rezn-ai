@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -16,14 +17,17 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from ..agents.llm_agents import inference_enabled
 from ..conductor import BatchConductor
 from ..generation.engine import LocalGeneratorEngine
 from ..generation.rezn_engine import ReznGeneratorEngine
+from ..memory.taste import build_taste_memory
 from ..models import (
     Batch,
     BatchCreateRequest,
     BatchEvent,
     Candidate,
+    CreativeBrief,
     DoctorResponse,
     FeedbackRequest,
     RefineRequest,
@@ -116,9 +120,22 @@ def _build_engine() -> Any:
 WEAVE_STATUS = initialize_weave()
 logger.info("Weave init: %s (project=%s)", WEAVE_STATUS.reason, WEAVE_STATUS.project)
 
+def _build_taste(store: Any) -> Any:
+    """Select the taste-memory backend via ``build_taste_memory``.
+
+    In production (``AGENT_MEMORY_REQUIRED=true``) this raises at startup unless the
+    Redis Cloud Agent Memory service is configured and reachable — there is no silent
+    local fallback. Tests force the local backend via ``REZN_DISABLE_REDIS``.
+    """
+    taste = build_taste_memory(store)
+    logger.info("Taste memory backend: %s", taste.health().get("backend"))
+    return taste
+
+
 store = _build_store()
 engine = _build_engine()
-conductor = BatchConductor(store=store, engine=engine, artifacts_root=ARTIFACTS_ROOT)
+taste = _build_taste(store)
+conductor = BatchConductor(store=store, engine=engine, artifacts_root=ARTIFACTS_ROOT, taste=taste)
 
 
 # ── Health & doctor ─────────────────────────────────────────────────────────
@@ -132,6 +149,10 @@ def health() -> dict[str, str]:
 def doctor() -> DoctorResponse:
     redis_status = store.doctor_status()
     redis_ok = redis_status.get("redis_ping", False)
+    taste_health = conductor.taste.health()
+    taste_backend = taste_health.get("backend")
+    agent_memory_live = taste_backend == "agent_memory" and bool(taste_health.get("reachable"))
+    inference_live = inference_enabled()
     checks = {
         "weave_import": True,
         "weave_project": bool(os.getenv("WEAVE_PROJECT") or os.getenv("WANDB_PROJECT")),
@@ -139,11 +160,13 @@ def doctor() -> DoctorResponse:
         "wandb_key": bool(os.getenv("WANDB_API_KEY")),
         "openai_key": bool(os.getenv("OPENAI_API_KEY")),
         "generator_engine": True,
+        "live_inference": inference_live,
         "artifacts_writable": os.access(ARTIFACTS_ROOT, os.W_OK),
         "redis": redis_ok,
         "redis_sorted_set": redis_status.get("sorted_set_accessible", False),
         "redis_streams": redis_status.get("streams_accessible", False),
         "redis_hashes": redis_status.get("hashes_accessible", False),
+        "agent_memory": agent_memory_live,
     }
     core_ok = checks["weave_import"] and checks["generator_engine"] and checks["artifacts_writable"]
     notes = [
@@ -152,7 +175,13 @@ def doctor() -> DoctorResponse:
                      if redis_ok else
                      "not connected — using InMemoryStore. Point REDIS_URL at Redis Cloud to enable shared live state."),
         "Set WANDB_API_KEY to upload traces to W&B Weave.",
-        "Set OPENAI_API_KEY for live critic/composer agents (optional).",
+        "Live inference: " + ("on — critic/composer agents call W&B Inference."
+                              if inference_live else
+                              "off — deterministic fallback. Set REZN_ENABLE_INFERENCE=1 for live agents."),
+        f"Taste memory backend: {taste_backend} "
+        + ("(Redis Cloud Agent Memory, reachable)." if agent_memory_live else
+           "— configure the Redis Cloud Agent Memory service (AGENT_MEMORY_URL, "
+           "AGENT_MEMORY_STORE_ID, AGENT_MEMORY_API_KEY) and set AGENT_MEMORY_REQUIRED=true for live taste recall."),
     ]
     return DoctorResponse(ok=core_ok, checks=checks, notes=notes)
 
@@ -243,3 +272,35 @@ def request_variant(candidate_id: str, request: FeedbackRequest) -> Candidate:
 def list_lessons(limit: int = 5) -> list[dict]:
     """Top-N refinement lessons ranked by improvement_delta (ZREVRANGE)."""
     return [lesson.model_dump() for lesson in store.recall_top_lessons(limit)]
+
+
+# ── Producer taste memory (Redis Agent Memory) ───────────────────────────────
+
+@app.get("/api/taste")
+def taste_profile(limit: int = 5) -> dict:
+    """The producer's taste profile: active backend + the top remembered lessons."""
+    return {
+        "backend": conductor.taste.health(),
+        "memories": [lesson.model_dump() for lesson in store.recall_top_lessons(limit)],
+    }
+
+
+@app.get("/api/taste/recall")
+def taste_recall(
+    prompt: str,
+    key: str = "F#",
+    mode: str = "minor",
+    tempo: float = 128.0,
+    limit: int = 5,
+) -> dict:
+    """Preview the taste recall + derived planning bias a brief would receive.
+
+    This is exactly what ``start_batch`` applies before generating, exposed for
+    the UI/demo so you can see *why* a fresh batch leans the way it does.
+    """
+    brief = CreativeBrief(prompt=prompt, key=key, mode=mode, tempo=tempo)
+    recall = conductor.taste.recall_taste(producer_id=conductor.producer_id, brief=brief, limit=limit)
+    return {
+        "facts": [asdict(fact) for fact in recall.facts],
+        "bias": asdict(recall.bias),
+    }

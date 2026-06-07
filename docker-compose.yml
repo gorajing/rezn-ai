@@ -25,10 +25,41 @@ services:
     environment:
       # Inside the compose network Redis is reachable as "redis".
       REDIS_URL: redis://redis:6379/0
+      # When the agent-memory profile is up, reach it by its service name. Harmless
+      # otherwise (the API just uses the local taste fallback).
+      AGENT_MEMORY_URL: ${AGENT_MEMORY_URL:-}
     volumes:
       # Persist generated artifacts/runs across restarts.
       - ./artifacts:/app/artifacts
       - ./runs:/app/runs
     depends_on:
       redis:
+        condition: service_healthy
+
+  # ── Optional: Redis Agent Memory (Redis Iris) for the Producer Taste Profile ──
+  # Enable with:  docker compose --profile memory up agent-memory
+  # Then set AGENT_MEMORY_URL=http://localhost:8088 in .env (host) or
+  # AGENT_MEMORY_URL=http://agent-memory:8000 for the in-network api service.
+  # Needs an embedding/LLM key (OPENAI_API_KEY) for semantic search.
+  agent-redis:
+    image: redis:8
+    profiles: ["memory"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  agent-memory:
+    image: redislabs/agent-memory-server:latest
+    profiles: ["memory"]
+    command: ["agent-memory", "api", "--host", "0.0.0.0", "--port", "8000", "--task-backend", "asyncio"]
+    ports:
+      - "8088:8000"
+    environment:
+      REDIS_URL: redis://agent-redis:6379/0
+      DISABLE_AUTH: "true"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      agent-redis:
         condition: service_healthy

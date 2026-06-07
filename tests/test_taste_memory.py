@@ -1,0 +1,237 @@
+"""Producer Taste Memory: bias derivation, planning application, both backends, API."""
+
+from __future__ import annotations
+
+import httpx
+import pytest
+
+from rezn_ai.generation.strategies import STRATEGIES, plan_candidates
+from rezn_ai.memory.agent_memory import AgentMemoryClient
+from rezn_ai.memory.local import LocalTasteMemory
+from rezn_ai.memory.taste import PlanningBias, TasteFact, build_taste_memory, derive_bias
+from rezn_ai.models import Candidate, CreativeBrief, MemoryLesson
+from rezn_ai.storage.memory_store import InMemoryStore
+
+
+def _brief(prompt: str = "dark melodic electronic, tense, controlled drums") -> CreativeBrief:
+    return CreativeBrief(prompt=prompt, key="D#", mode="minor", tempo=128.0)
+
+
+def _candidate(strategy: str = "groove_architect", **kw) -> Candidate:
+    base = dict(candidate_id="c1", batch_id="b1", strategy=strategy, seed=77,
+                key="D#", mode="minor", tempo=128.0, technical_score=0.7)
+    base.update(kw)
+    return Candidate(**base)
+
+
+# ── derive_bias ────────────────────────────────────────────────────────────────
+
+def test_derive_bias_empty_facts_is_empty():
+    bias = derive_bias([], brief=_brief())
+    assert bias.is_empty
+    assert PlanningBias().is_empty
+
+
+def test_derive_bias_aggregates_strategy_and_mode():
+    facts = [
+        TasteFact("loved groove minor", weight=2.0, strategy="groove_architect", mode="minor"),
+        TasteFact("more groove", weight=1.0, strategy="groove_architect", mode="minor"),
+        TasteFact("texture ok", weight=0.5, strategy="texture_builder", mode="minor"),
+    ]
+    bias = derive_bias(facts, brief=_brief())
+    assert bias.strategy_boosts["groove_architect"] == pytest.approx(3.0)
+    assert bias.strategy_boosts["texture_builder"] == pytest.approx(0.5)
+    assert bias.mode_pref == "minor"  # dominates
+    assert not bias.is_empty
+
+
+def test_derive_bias_tempo_is_clamped():
+    facts = [TasteFact("fast", weight=1.0, strategy="energy_curve", tempo=200.0)]
+    bias = derive_bias(facts, brief=_brief())  # brief tempo 128 -> raw +72, clamp +6
+    assert bias.tempo_delta == 6.0
+
+
+def test_derive_bias_mode_not_forced_when_split():
+    facts = [
+        TasteFact("a", weight=1.0, strategy="groove_architect", mode="minor"),
+        TasteFact("b", weight=1.0, strategy="harmony_driver", mode="major"),
+    ]
+    bias = derive_bias(facts, brief=_brief())
+    assert bias.mode_pref is None  # 50/50 < 0.6 threshold
+
+
+# ── plan_candidates: empty-bias is a strict no-op ────────────────────────────────
+
+def test_plan_candidates_empty_bias_matches_none():
+    kw = dict(prompt="x", key="D#", mode="minor", tempo=128.0, count=5)
+    base = plan_candidates(**kw)
+    assert plan_candidates(**kw, bias=None) == base
+    assert plan_candidates(**kw, bias=PlanningBias()) == base
+
+
+def test_plan_candidates_boost_allocates_more_slots():
+    kw = dict(prompt="x", key="D#", mode="minor", tempo=128.0, count=3)
+    bias = PlanningBias(strategy_boosts={"groove_architect": 6.0})
+    plan = plan_candidates(**kw, bias=bias)
+    strategies = [p.strategy for p in plan]
+    assert strategies.count("groove_architect") >= 2  # favoured strategy dominates
+
+
+def test_plan_candidates_tempo_and_mode_applied():
+    kw = dict(prompt="x", key="D#", mode="minor", tempo=128.0, count=4)
+    bias = PlanningBias(tempo_delta=3.0, mode_pref="major")
+    plan = plan_candidates(**kw, bias=bias)
+    assert all(p.mode == "major" for p in plan)
+    base = plan_candidates(**kw)
+    # Each slot's tempo is the base tempo + 3 (tempo-only bias keeps round-robin).
+    assert [round(p.tempo - b.tempo, 2) for p, b in zip(plan, base)] == [3.0] * 4
+
+
+def test_plan_candidates_is_deterministic_under_bias():
+    kw = dict(prompt="x", key="D#", mode="minor", tempo=128.0, count=4)
+    bias = PlanningBias(strategy_boosts={"texture_builder": 4.0}, tempo_delta=2.0)
+    assert plan_candidates(**kw, bias=bias) == plan_candidates(**kw, bias=bias)
+
+
+# ── LocalTasteMemory ─────────────────────────────────────────────────────────
+
+def test_local_taste_recall_from_seeded_lessons():
+    store = InMemoryStore()
+    store.remember(
+        MemoryLesson(body="groove_architect in D# minor was approved at score 0.8",
+                     strategy="groove_architect", tags=["groove_architect", "minor"]),
+        improvement_delta=2.0,
+    )
+    taste = LocalTasteMemory(store)
+    recall = taste.recall_taste(producer_id="default", brief=_brief())
+    assert recall.facts
+    assert recall.facts[0].strategy == "groove_architect"
+    assert recall.bias.strategy_boosts.get("groove_architect", 0) > 0
+    assert taste.health() == {"backend": "local_lessons", "reachable": True}
+
+
+def test_local_taste_ignores_rejections():
+    store = InMemoryStore()
+    store.remember(MemoryLesson(body="rejected", strategy="harmony_driver",
+                                tags=["harmony_driver", "minor"]), improvement_delta=-0.25)
+    recall = LocalTasteMemory(store).recall_taste(producer_id="default", brief=_brief())
+    assert recall.bias.is_empty  # negative-delta lessons contribute no boost
+
+
+def test_local_remember_is_noop():
+    store = InMemoryStore()
+    LocalTasteMemory(store).remember_curation(
+        producer_id="default", session_id="b1", action="approved", candidate=_candidate())
+    assert store.list_memories() == []  # conductor owns lesson persistence
+
+
+# ── AgentMemoryClient (mocked transport, managed Redis Cloud API shape) ──────
+
+_BASE = "http://agent-memory.test"
+_STORE = "store_abc"
+
+
+def _mock_client(handler) -> AgentMemoryClient:
+    transport = httpx.MockTransport(handler)
+    http = httpx.Client(transport=transport, base_url=_BASE,
+                        headers={"Authorization": "Bearer k"})
+    return AgentMemoryClient(base_url=_BASE, store_id=_STORE, api_key="k", _client=http)
+
+
+def test_agent_client_sends_bearer_and_store_scoped_paths():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("Authorization") == "Bearer k"
+        assert request.url.path.startswith(f"/v1/stores/{_STORE}/")
+        seen.append(f"{request.method} {request.url.path}")
+        return httpx.Response(200, json={})
+
+    _mock_client(handler).health()
+    assert seen == [f"GET /v1/stores/{_STORE}/session-memory"]
+
+
+def test_agent_client_health_reachable_on_200():
+    assert _mock_client(lambda r: httpx.Response(200, json=[])).health()["reachable"] is True
+
+
+def test_agent_client_health_unreachable_on_401():
+    assert _mock_client(lambda r: httpx.Response(401, json={})).health()["reachable"] is False
+
+
+def test_agent_client_remember_writes_session_event_and_long_term():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(f"{request.method} {request.url.path}")
+        return httpx.Response(200, json={})
+
+    _mock_client(handler).remember_curation(
+        producer_id="default", session_id="b1", action="approved", candidate=_candidate())
+    assert f"POST /v1/stores/{_STORE}/session-memory/events" in seen
+    assert f"POST /v1/stores/{_STORE}/long-term-memory" in seen
+
+
+def test_agent_client_rejected_action_skips_long_term():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={})
+
+    _mock_client(handler).remember_curation(
+        producer_id="default", session_id="b1", action="rejected", candidate=_candidate())
+    assert f"/v1/stores/{_STORE}/long-term-memory" not in seen  # only durable actions promote
+
+
+def test_agent_client_recall_maps_memories_to_bias():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/v1/stores/{_STORE}/long-term-memory/search"
+        return httpx.Response(200, json={"memories": [
+            {"text": "Producer approved a groove_architect candidate in D# minor at 128 bpm",
+             "topics": ["groove_architect", "minor"], "score": 0.9},
+        ]})
+
+    recall = _mock_client(handler).recall_taste(producer_id="default", brief=_brief())
+    assert recall.facts[0].strategy == "groove_architect"
+    assert recall.facts[0].mode == "minor"
+    assert recall.facts[0].tempo == 128.0
+    assert recall.bias.strategy_boosts["groove_architect"] > 0
+
+
+def test_agent_client_unreachable_degrades_gracefully():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    client = _mock_client(handler)
+    assert client.health()["reachable"] is False
+    recall = client.recall_taste(producer_id="default", brief=_brief())
+    assert recall.facts == [] and recall.bias.is_empty  # no crash
+
+
+# ── Factory: hermeticity + strict no-fallback posture ────────────────────────
+
+def test_build_taste_memory_local_under_disable_redis(monkeypatch):
+    monkeypatch.setenv("REZN_DISABLE_REDIS", "1")
+    monkeypatch.setenv("AGENT_MEMORY_URL", "http://should-not-be-probed.test")
+    taste = build_taste_memory(InMemoryStore())
+    assert isinstance(taste, LocalTasteMemory)  # never probes the network in tests
+
+
+def test_build_taste_memory_required_but_unconfigured_raises(monkeypatch):
+    from rezn_ai.memory.taste import AgentMemoryUnavailable
+
+    monkeypatch.delenv("REZN_DISABLE_REDIS", raising=False)
+    monkeypatch.setenv("AGENT_MEMORY_REQUIRED", "true")
+    monkeypatch.setenv("AGENT_MEMORY_URL", "")
+    monkeypatch.setenv("AGENT_MEMORY_STORE_ID", "")
+    monkeypatch.setenv("AGENT_MEMORY_API_KEY", "")
+    with pytest.raises(AgentMemoryUnavailable):
+        build_taste_memory(InMemoryStore())  # no silent local fallback in production
+
+
+def test_build_taste_memory_optional_unconfigured_falls_back(monkeypatch):
+    monkeypatch.delenv("REZN_DISABLE_REDIS", raising=False)
+    monkeypatch.delenv("AGENT_MEMORY_REQUIRED", raising=False)
+    monkeypatch.setenv("AGENT_MEMORY_URL", "")
+    assert isinstance(build_taste_memory(InMemoryStore()), LocalTasteMemory)

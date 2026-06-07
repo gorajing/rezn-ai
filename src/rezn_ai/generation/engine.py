@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import weave
+
+if TYPE_CHECKING:
+    from ..memory.taste import PlanningBias
 
 from ..eval.audio_metrics import measure_wav
 from ..models import CreativeBrief, new_id
@@ -49,9 +52,18 @@ class GeneratorEngine(Protocol):
     """Contract the conductor wraps. Implement this to swap in a different engine."""
 
     def orchestrate_batch(
-        self, brief: CreativeBrief, batch_id: str, artifacts_root: Path
+        self,
+        brief: CreativeBrief,
+        batch_id: str,
+        artifacts_root: Path,
+        *,
+        bias: "PlanningBias | None" = None,
     ) -> list[CandidateResult]:
-        """Generate `brief.candidate_count` candidates, ranked best-first."""
+        """Generate `brief.candidate_count` candidates, ranked best-first.
+
+        ``bias`` is an optional taste nudge from recalled producer memory; when
+        absent or empty the plan is unchanged.
+        """
 
     def generate_variant(
         self,
@@ -84,7 +96,12 @@ class LocalGeneratorEngine:
 
     @weave.op()
     def orchestrate_batch(
-        self, brief: CreativeBrief, batch_id: str, artifacts_root: Path
+        self,
+        brief: CreativeBrief,
+        batch_id: str,
+        artifacts_root: Path,
+        *,
+        bias: "PlanningBias | None" = None,
     ) -> list[CandidateResult]:
         plan = plan_candidates(
             prompt=brief.prompt,
@@ -92,6 +109,7 @@ class LocalGeneratorEngine:
             mode=brief.mode,
             tempo=brief.tempo,
             count=brief.candidate_count,
+            bias=bias,
         )
         results = [self._render(batch_id, artifacts_root, params, brief) for params in plan]
         results.sort(key=lambda r: r.technical_score, reverse=True)

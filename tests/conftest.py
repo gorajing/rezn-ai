@@ -12,6 +12,7 @@ os.environ.setdefault("WANDB_INFERENCE_API_KEY", "")
 os.environ.setdefault("OPENAI_API_KEY", "")
 os.environ.setdefault("REZN_ENABLE_INFERENCE", "0")  # deterministic agents, no live LLM calls
 os.environ.setdefault("WANDB_MODE", "disabled")      # belt-and-suspenders: keep wandb fully offline
+os.environ.setdefault("AGENT_MEMORY_URL", "")        # -> taste memory uses the local fallback, no network
 
 import fakeredis
 import pytest

@@ -1,0 +1,216 @@
+"""Contracts and bias derivation for Producer Taste Memory.
+
+A :class:`TasteMemory` backend records curation as memories and recalls the most
+relevant taste facts for a brief. :func:`derive_bias` turns those facts into a
+bounded, explainable :class:`PlanningBias` that the generator applies so the first
+candidate of a fresh batch already leans toward the producer's demonstrated taste.
+
+Everything here is pure and deterministic; the backends live in sibling modules.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+from ..generation.strategies import STRATEGIES
+from ..models import CreativeBrief
+
+if TYPE_CHECKING:  # avoid import cycles / heavy imports at runtime
+    from ..models import Candidate
+
+# How far taste is allowed to pull the tempo from the brief, in BPM.
+MAX_TEMPO_DELTA = 6.0
+# A mode is only forced when it clearly dominates the recalled taste weight.
+MODE_PREF_THRESHOLD = 0.6
+_VALID_MODES = ("minor", "major")
+
+
+@dataclass(frozen=True)
+class TasteFact:
+    """One recalled unit of taste, normalized across backends."""
+
+    text: str
+    weight: float = 1.0
+    strategy: str | None = None
+    mode: str | None = None
+    tempo: float | None = None
+    source: str = "local_lessons"
+
+
+@dataclass(frozen=True)
+class PlanningBias:
+    """A bounded nudge applied to candidate planning, derived from taste facts."""
+
+    strategy_boosts: dict[str, float] = field(default_factory=dict)
+    tempo_delta: float = 0.0
+    mode_pref: str | None = None
+    notes: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        """True when the bias would not change planning at all (a strict no-op)."""
+        return (
+            not self.strategy_boosts
+            and self.tempo_delta == 0.0
+            and self.mode_pref is None
+        )
+
+
+@dataclass(frozen=True)
+class TasteRecall:
+    """What a backend recalled for a brief: the facts and the derived bias."""
+
+    facts: list[TasteFact] = field(default_factory=list)
+    bias: PlanningBias = field(default_factory=PlanningBias)
+
+
+@runtime_checkable
+class TasteMemory(Protocol):
+    """Backend contract. Implementations must never raise into the request path."""
+
+    def remember_curation(
+        self,
+        *,
+        producer_id: str,
+        session_id: str,
+        action: str,
+        candidate: "Candidate",
+        note: str = "",
+    ) -> None:
+        """Record one curation decision into the producer's taste profile."""
+
+    def recall_taste(
+        self, *, producer_id: str, brief: CreativeBrief, limit: int = 5
+    ) -> TasteRecall:
+        """Recall the taste most relevant to ``brief`` and derive a planning bias."""
+
+    def health(self) -> dict[str, Any]:
+        """Report the active backend and whether it is reachable."""
+
+
+def derive_bias(facts: list[TasteFact], *, brief: CreativeBrief) -> PlanningBias:
+    """Aggregate recalled facts into a bounded, deterministic planning bias.
+
+    - strategy_boosts: summed positive fact weight per known strategy.
+    - tempo_delta: weighted mean of (fact.tempo - brief.tempo), clamped to
+      ±MAX_TEMPO_DELTA.
+    - mode_pref: set only when one mode holds >= MODE_PREF_THRESHOLD of the
+      mode-bearing weight.
+    """
+    if not facts:
+        return PlanningBias()
+
+    strategy_boosts: dict[str, float] = {}
+    mode_weight: dict[str, float] = {"minor": 0.0, "major": 0.0}
+    tempo_num = 0.0
+    tempo_den = 0.0
+    sources: list[str] = []
+
+    for fact in facts:
+        weight = max(0.0, float(fact.weight))
+        if fact.source not in sources:
+            sources.append(fact.source)
+        if fact.strategy in STRATEGIES and weight > 0:
+            strategy_boosts[fact.strategy] = round(
+                strategy_boosts.get(fact.strategy, 0.0) + weight, 4
+            )
+        if fact.mode in _VALID_MODES and weight > 0:
+            mode_weight[fact.mode] += weight
+        if fact.tempo is not None and weight > 0:
+            tempo_num += (float(fact.tempo) - brief.tempo) * weight
+            tempo_den += weight
+
+    tempo_delta = 0.0
+    if tempo_den > 0:
+        raw = tempo_num / tempo_den
+        tempo_delta = round(max(-MAX_TEMPO_DELTA, min(MAX_TEMPO_DELTA, raw)), 2)
+
+    mode_pref: str | None = None
+    total_mode = mode_weight["minor"] + mode_weight["major"]
+    if total_mode > 0:
+        top_mode = max(mode_weight, key=lambda m: mode_weight[m])
+        if mode_weight[top_mode] / total_mode >= MODE_PREF_THRESHOLD:
+            mode_pref = top_mode
+
+    notes: list[str] = []
+    if strategy_boosts:
+        top = max(strategy_boosts, key=lambda s: strategy_boosts[s])
+        notes.append(f"favours {top}")
+    if mode_pref:
+        notes.append(f"prefers {mode_pref}")
+    if tempo_delta:
+        notes.append(f"tempo {tempo_delta:+g} bpm")
+
+    return PlanningBias(
+        strategy_boosts=strategy_boosts,
+        tempo_delta=tempo_delta,
+        mode_pref=mode_pref,
+        notes=notes,
+        sources=sources,
+    )
+
+
+def _is_truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+class AgentMemoryUnavailable(RuntimeError):
+    """Raised when the real Agent Memory backend is required but not usable."""
+
+
+def build_taste_memory(store: Any) -> TasteMemory:
+    """Pick the taste backend.
+
+    - ``REZN_DISABLE_REDIS`` truthy → always the local fallback (hermetic tests only).
+    - The real Redis Cloud Agent Memory backend is used when ``AGENT_MEMORY_URL``,
+      ``AGENT_MEMORY_STORE_ID``, and ``AGENT_MEMORY_API_KEY`` are set and the service
+      is reachable.
+    - ``AGENT_MEMORY_REQUIRED`` truthy makes the absence/unreachability of the real
+      backend a hard error (no silent local fallback) — the production posture.
+    - Otherwise the local fallback is used (developer convenience).
+    """
+    from .local import LocalTasteMemory
+
+    if _is_truthy(os.getenv("REZN_DISABLE_REDIS")):
+        return LocalTasteMemory(store)
+
+    required = _is_truthy(os.getenv("AGENT_MEMORY_REQUIRED"))
+    url = (os.getenv("AGENT_MEMORY_URL") or "").strip()
+    store_id = (os.getenv("AGENT_MEMORY_STORE_ID") or "").strip()
+    api_key = (os.getenv("AGENT_MEMORY_API_KEY") or "").strip()
+
+    missing = [
+        name
+        for name, value in (
+            ("AGENT_MEMORY_URL", url),
+            ("AGENT_MEMORY_STORE_ID", store_id),
+            ("AGENT_MEMORY_API_KEY", api_key),
+        )
+        if not value
+    ]
+    if missing:
+        if required:
+            raise AgentMemoryUnavailable(
+                "AGENT_MEMORY_REQUIRED is set but the Redis Cloud Agent Memory "
+                f"service is not configured (missing: {', '.join(missing)}). "
+                "Create the service in the Redis Cloud console and set its endpoint, "
+                "Store ID, and API key."
+            )
+        return LocalTasteMemory(store)
+
+    from .agent_memory import AgentMemoryClient
+
+    client = AgentMemoryClient(base_url=url, store_id=store_id, api_key=api_key)
+    health = client.health()
+    if health.get("reachable"):
+        return client
+    if required:
+        raise AgentMemoryUnavailable(
+            f"AGENT_MEMORY_REQUIRED is set but the Agent Memory service at {url} "
+            f"is not reachable (status {health.get('status')}). Check the endpoint, "
+            "Store ID, and API key."
+        )
+    return LocalTasteMemory(store)

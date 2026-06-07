@@ -14,9 +14,12 @@ remains available via ``REZN_ENGINE=local``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import weave
+
+if TYPE_CHECKING:
+    from ..memory.taste import PlanningBias
 
 from ..agents.llm_agents import critique, propose_plan
 from ..agents.schemas import CreativeBrief as AgentBrief
@@ -41,7 +44,12 @@ class ReznGeneratorEngine:
 
     @weave.op()
     def orchestrate_batch(
-        self, brief: CreativeBrief, batch_id: str, artifacts_root: Path
+        self,
+        brief: CreativeBrief,
+        batch_id: str,
+        artifacts_root: Path,
+        *,
+        bias: "PlanningBias | None" = None,
     ) -> list[CandidateResult]:
         plan = plan_candidates(
             prompt=brief.prompt,
@@ -49,6 +57,7 @@ class ReznGeneratorEngine:
             mode=brief.mode,
             tempo=brief.tempo,
             count=brief.candidate_count,
+            bias=bias,
         )
         results = [self._render(batch_id, artifacts_root, params, brief) for params in plan]
         results.sort(key=lambda r: r.technical_score, reverse=True)
