@@ -135,6 +135,15 @@ class BatchConductor:
             bias, profile_weights=profile_weights, prompt_policies=prompt_policies
         )
 
+    def _taste_vector(self) -> dict[str, float]:
+        """The producer's persistent taste vector (drum features), without the
+        ``__count__`` field. Empty -> no bias. Never raises into the request path."""
+        try:
+            vec = self.store.get_taste_vector(self.producer_id)
+        except Exception:
+            return {}
+        return {k: float(v) for k, v in vec.items() if k != "__count__"}
+
     def _update_policy(self, batch_id: str) -> dict | None:
         """Recompute the producer's taste vector from this batch's FINAL decision set
         — contrastive (approved minus rejected), idempotent, with no penalty for a
@@ -170,12 +179,15 @@ class BatchConductor:
                 if abs(acc[feature]) < 1e-9:
                     acc.pop(feature, None)
 
+            # The vector is a learned ADDITIVE delta (apply_taste adds it to the kit),
+            # clamped to the feature's span so a single feature can never swing more
+            # than its full range.
             vector: dict[str, float] = {}
             for feature, raw in acc.items():
-                spec = FEATURE_SPECS[feature]
-                target = max(spec.min, min(spec.max, spec.default + raw))
-                if abs(target - spec.default) > 1e-9:
-                    vector[feature] = round(target, 6)
+                span = FEATURE_SPECS[feature].max - FEATURE_SPECS[feature].min
+                delta = max(-span, min(span, raw))
+                if abs(delta) > 1e-9:
+                    vector[feature] = round(delta, 6)
 
             current_count = int(self.store.get_taste_vector(self.producer_id).get("__count__", 0))
             count = max(0, current_count - old_n + len(decided))
@@ -435,7 +447,10 @@ class BatchConductor:
 
         batch = self.store.get_batch(parent.batch_id)
         salt = len(batch.candidates)
-        result = self.engine.generate_variant(batch.brief, parent.batch_id, self.artifacts_root, parent, salt)
+        result = self.engine.generate_variant(
+            batch.brief, parent.batch_id, self.artifacts_root, parent, salt,
+            taste=self._taste_vector(),
+        )
         child = self._to_candidate(result, parent.batch_id, parent_id=parent.candidate_id)
         self.store.save_candidate(child)
         self._event(parent.batch_id, "candidate.variant",
@@ -621,10 +636,12 @@ class BatchConductor:
                 raise
         self._event(child_id, "taste.updated", policy_update["reason"], policy_update)
 
+        taste_vector = self._taste_vector()
         for slot, strategy in enumerate(allocation):
             parent_cand = self._best_parent(parent_candidates, strategy, recall.bias.strategy_boosts)
             result = self.engine.generate_variant(
-                parent.brief, child_id, self.artifacts_root, parent_cand, salt=slot, guidance=guidance
+                parent.brief, child_id, self.artifacts_root, parent_cand, salt=slot,
+                guidance=guidance, taste=taste_vector,
             )
             child = self._to_candidate(result, child_id, parent_id=parent_cand.candidate_id)
             self._stamp_preference(child, recall.bias.strategy_boosts)

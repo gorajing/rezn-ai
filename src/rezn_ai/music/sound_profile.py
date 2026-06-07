@@ -249,14 +249,17 @@ def resolve_kit(*, genre: str | None, strategy: str, energy: float, seed: int) -
     return _apply_features(base, feats, name=f"{family}:{strategy}")
 
 
-def apply_taste(kit: DrumKit, taste: dict[str, float], *, pull: float = 0.3) -> DrumKit:
-    """Nudge a kit's features toward learned taste targets (bounded, clamped).
-    Empty taste is a strict no-op."""
+def apply_taste(kit: DrumKit, taste: dict[str, float], *, strength: float = 1.0) -> DrumKit:
+    """Apply the learned taste as a bounded ADDITIVE bias to each controllable
+    feature. The taste vector is a *contrastive learned delta* (e.g. approving
+    higher-drive candidates yields a positive ``kick.drive`` delta), so it is added
+    to the kit and clamped to the feature range — nudging, never dominating, because
+    the deltas are small. Empty taste is a strict no-op."""
     if not taste:
         return kit
     current = _kit_features(kit)
     feats = dict(current)
-    for key, target in taste.items():
+    for key, delta in taste.items():
         if key in current:
-            feats[key] = current[key] + pull * (target - current[key])
+            feats[key] = current[key] + strength * float(delta)
     return _apply_features(kit, feats, name=kit.name)

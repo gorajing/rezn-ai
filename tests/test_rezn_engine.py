@@ -80,6 +80,30 @@ def test_rezn_engine_variant_has_lineage(tmp_path):
     assert child.strategy == parent.strategy
 
 
+def test_taste_vector_changes_drum_params_paired_counterfactual(tmp_path):
+    """Holding (brief, seed, strategy) fixed, a non-empty taste vector changes the
+    rendered drum params; an empty vector is a strict no-op (byte-identity)."""
+    from rezn_ai.memory.taste import PlanningBias
+
+    eng = ReznGeneratorEngine(preview_seconds=0.3, sample_rate=8_000)
+    brief = CreativeBrief(prompt="dark techno", key="D#", mode="minor", tempo=128.0,
+                          candidate_count=1, energy=0.5)
+    off = eng.orchestrate_batch(brief, "b_off", tmp_path, bias=PlanningBias())
+    on = eng.orchestrate_batch(
+        brief, "b_on", tmp_path, bias=PlanningBias(profile_weights={"kick.drive": 1.0})
+    )
+    assert off[0].strategy == on[0].strategy  # same take, isolated counterfactual
+    off_drive = off[0].profile_features["kick.drive"]
+    on_drive = on[0].profile_features["kick.drive"]
+    assert on_drive > off_drive  # taste pulled drive up toward the target
+
+    # Empty taste must be a strict no-op vs no bias at all.
+    off2 = eng.orchestrate_batch(
+        brief, "b_off2", tmp_path, bias=PlanningBias(profile_weights={})
+    )
+    assert off2[0].profile_features["kick.drive"] == off_drive
+
+
 def test_rezn_engine_is_deterministic(tmp_path):
     brief = CreativeBrief(prompt="x", key="A", mode="minor", tempo=120.0, candidate_count=3)
     a = _conductor(tmp_path / "a").start_batch(BatchCreateRequest(brief=brief))

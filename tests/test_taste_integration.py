@@ -208,6 +208,24 @@ def test_curation_updates_taste_vector_contrastively(tmp_path):
     assert nudged.kick.drive > DrumKit.kernel().kick.drive  # taste raises drive on the kernel kit
 
 
+def test_end_to_end_loop_raises_drum_drive_in_next_batch(tmp_path):
+    """The full loop closes: approve a higher-drive take, reject a lower-drive one,
+    and a fresh batch renders the same strategies with MORE kick drive (the additive
+    taste bias), within clamp."""
+    cond = _conductor(tmp_path)
+    b1 = cond.start_batch(BatchCreateRequest(brief=_brief(4)))
+    by_drive = sorted(b1.candidates, key=lambda c: c.profile_features.get("kick.drive", 0.0))
+    cond.approve_candidate(by_drive[-1].candidate_id)  # higher drive
+    cond.reject_candidate(by_drive[0].candidate_id)    # lower drive
+    b2 = cond.start_batch(BatchCreateRequest(brief=_brief(4)))
+    first = {c.strategy: c.profile_features.get("kick.drive", 0.0) for c in b1.candidates}
+    second = {c.strategy: c.profile_features.get("kick.drive", 0.0) for c in b2.candidates}
+    shared = set(first) & set(second)
+    assert shared
+    assert all(second[s] >= first[s] for s in shared)  # taste never lowered drive
+    assert any(second[s] > first[s] for s in shared)   # and raised at least one
+
+
 def test_taste_update_is_idempotent_approve_then_final(tmp_path):
     """approve -> select_final on the same candidate must not double-count the vector."""
     cond = _conductor(tmp_path)

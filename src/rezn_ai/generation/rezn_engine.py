@@ -58,10 +58,12 @@ class ReznGeneratorEngine:
         )
         guidance = list(bias.suggestions) if bias is not None else None
         policies = bias.prompt_policies if bias is not None else {}
+        taste = bias.profile_weights if bias is not None else None
         results = [
             self._render(
                 batch_id, artifacts_root, params, brief, guidance,
                 prompt_policy=policies.get(params.strategy),
+                taste=taste,
             )
             for params in plan
         ]
@@ -78,6 +80,7 @@ class ReznGeneratorEngine:
         salt: int = 0,
         *,
         guidance: list[str] | None = None,
+        taste: dict[str, float] | None = None,
     ) -> CandidateResult:
         parent_params = CandidateParams(
             parent.strategy, parent.seed, parent.key, parent.mode, parent.tempo
@@ -118,6 +121,7 @@ class ReznGeneratorEngine:
                     nudges=nudges,
                     parent_profile_id=parent_profile_id,
                     prompt_policy=parent_policy,
+                    taste=taste,
                 )
                 if best is None or result.technical_score > best.technical_score:
                     best = result
@@ -134,6 +138,7 @@ class ReznGeneratorEngine:
             nudges=nudges,
             parent_profile_id=parent_profile_id,
             prompt_policy=parent_policy,
+            taste=taste,
         )
 
     @weave_op("compose_candidate")
@@ -149,6 +154,7 @@ class ReznGeneratorEngine:
         nudges: Any | None = None,
         parent_profile_id: str | None = None,
         prompt_policy: dict[str, Any] | None = None,
+        taste: dict[str, float] | None = None,
     ) -> CandidateResult:
         candidate_id = new_id("cand")
         candidate_dir = Path(artifacts_root) / "batches" / batch_id / candidate_id
@@ -188,6 +194,8 @@ class ReznGeneratorEngine:
             strategy=params.strategy,
             energy=energy,
             prompt=internal_prompt,
+            # The learned taste vector nudges the drum kit (empty -> no bias).
+            taste=(taste or None),
         )
         arrangement_path = candidate_dir / "arrangement.json"
         write_json(arrangement_path, arrangement)
