@@ -9,14 +9,15 @@ reproduces the original kernel exactly (so the CLI + tests are unchanged).
 
 from __future__ import annotations
 
+import math
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from rezn_ai import __version__
 
 from .arrangement import DEFAULT_FORM, section_start_beats, total_beats
-from .theory import scale_note
+from .theory import chord_from_root, scale_note
 from .timbre import select_voices
 from ..provenance import utc_now
 
@@ -60,6 +61,15 @@ _DRUM_PATTERNS: dict[str, dict[str, tuple[float, ...]]] = {
         "snare": (2.0,),
         "hat": (0.25, 0.75, 1.25, 1.75, 2.25, 2.75, 3.25, 3.75),
     },
+    # Genre grooves — deliberately drop the four-on-the-floor kick so the rhythm
+    # reads as the genre, not techno. (Swing is applied separately.)
+    "jazz_swing": {"kick": (0.0,), "snare": (1.0, 3.0), "hat": (0.0, 1.0, 1.5, 2.0, 3.0, 3.5)},
+    "boom_bap": {"kick": (0.0, 2.5), "snare": (1.0, 3.0), "hat": (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5)},
+    "rock_backbeat": {"kick": (0.0, 1.5, 2.0), "snare": (1.0, 3.0), "hat": (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5)},
+    "funk_pocket": {"kick": (0.0, 0.75, 2.5), "snare": (1.0, 3.0), "hat": tuple(i * 0.25 for i in range(16))},
+    "trap": {"kick": (0.0, 2.5), "snare": (2.0,), "hat": tuple(i * 0.25 for i in range(16))},
+    "dnb_break": {"kick": (0.0, 2.5), "snare": (1.0, 3.0), "hat": tuple(i * 0.25 for i in range(16))},
+    "one_drop": {"kick": (2.0,), "snare": (2.0,), "hat": (0.5, 1.5, 2.5, 3.5)},
 }
 
 
@@ -82,6 +92,11 @@ class Style:
     texture_steps: int = 8
     texture_gain: float = 1.0
     dynamics: float = 1.0  # how strongly section energy swings velocity
+    # Genre-idiom knobs (overlaid by a genre on top of a strategy). Defaults
+    # reproduce the kernel exactly: no swing, diatonic mode, scale-stacked chords.
+    swing: float = 0.0  # 0=straight; ~0.6 delays off-eighths toward a triplet feel
+    scale: str | None = None  # override the brief mode, e.g. "dorian", "blues"
+    chord_quality: str = "scale"  # "scale"=diatonic stack; else a named chord (dom7, power, …)
 
 
 DEFAULT_STYLE = Style()
@@ -183,6 +198,75 @@ def voices_for(strategy: str) -> dict[str, str]:
     return {**DEFAULT_VOICES, **STRATEGY_VOICES.get(strategy, {})}
 
 
+# --------------------------------------------------------------------------- #
+# Genres: idiom overlays applied on top of a strategy.
+# A *strategy* sets arrangement emphasis (harmony-forward, texture density, …);
+# a *genre* overlays musical idiom — its drum groove (the dominant "what genre is
+# this" cue), swing feel, scale, and chord quality. Genres set the groove for the
+# batch while strategies still vary density/dynamics, so candidates stay distinct.
+# Timbre is chosen separately, from the prompt (see music.timbre.select_voices).
+# Each value is a partial Style override; instrument choice is intentionally NOT
+# here (that lives in the prompt-driven voices map).
+# --------------------------------------------------------------------------- #
+
+GENRES: dict[str, dict[str, Any]] = {
+    "jazz": {"swing": 0.62, "scale": "dorian", "chord_quality": "min7", "drum_profile": "jazz_swing",
+             "drum_gain": 0.8, "bass_walk": True,
+             "bass_offsets": (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5), "bass_dur": 0.45},
+    "blues": {"swing": 0.5, "scale": "blues", "chord_quality": "dom7", "drum_profile": "rock_backbeat", "bass_walk": True},
+    "lofi": {"swing": 0.55, "chord_quality": "maj7", "drum_profile": "boom_bap", "drum_gain": 0.85, "dynamics": 0.7},
+    "funk": {"swing": 0.2, "chord_quality": "min7", "drum_profile": "funk_pocket", "bass_walk": True,
+             "bass_offsets": (0.0, 0.5, 0.75, 1.5, 2.0, 2.75, 3.5)},
+    "ambient": {"swing": 0.0, "chord_quality": "maj7", "drum_profile": "minimal", "drum_gain": 0.5, "dynamics": 0.55},
+    "rock": {"swing": 0.0, "chord_quality": "power", "drum_profile": "rock_backbeat"},
+    "house": {"swing": 0.0, "chord_quality": "min7", "drum_profile": "four_floor"},
+    "trap": {"swing": 0.0, "chord_quality": "min7", "drum_profile": "trap", "bass_dur": 1.6},
+    "soul": {"swing": 0.3, "chord_quality": "maj7", "drum_profile": "boom_bap", "bass_walk": True},
+    "dnb": {"swing": 0.0, "chord_quality": "min7", "drum_profile": "dnb_break", "bass_dur": 1.2},
+    "reggae": {"swing": 0.0, "chord_quality": "min7", "drum_profile": "one_drop"},
+}
+
+# Prompt keywords that select a genre. Only *non-native* idioms are listed;
+# techno/electronic map to nothing so the native four-on-the-floor stays default.
+_GENRE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("lo-fi", "lofi"), ("lofi", "lofi"), ("chillhop", "lofi"), ("chill", "lofi"),
+    ("drum and bass", "dnb"), ("drum & bass", "dnb"), ("dnb", "dnb"), ("jungle", "dnb"),
+    ("bebop", "jazz"), ("swing", "jazz"), ("jazz", "jazz"),
+    ("blues", "blues"), ("funk", "funk"),
+    ("ambient", "ambient"), ("drone", "ambient"), ("atmospheric", "ambient"),
+    ("rock", "rock"), ("metal", "rock"), ("punk", "rock"),
+    ("house", "house"), ("trap", "trap"),
+    ("soul", "soul"), ("r&b", "soul"), ("rnb", "soul"),
+    ("reggae", "reggae"), ("dub", "reggae"),
+)
+
+
+def detect_genre(prompt: str | None) -> str | None:
+    """Map a free-text brief to a known genre, or None for the native idiom.
+
+    Deterministic substring match, first keyword wins. Unrecognised prompts
+    (incl. techno/electronic) return None, leaving the kernel groove unchanged.
+    """
+    if not prompt:
+        return None
+    lowered = prompt.lower()
+    for keyword, genre in _GENRE_KEYWORDS:
+        if keyword in lowered:
+            return genre
+    return None
+
+
+def resolve_style(strategy: str, genre: str | None = None) -> Style:
+    """The Style for a candidate: a strategy, optionally overlaid by a genre idiom."""
+    base = style_for(strategy)
+    if not genre:
+        return base
+    overrides = GENRES.get(genre.lower())
+    if not overrides:
+        return base
+    return replace(replace(base, **overrides), name=f"{genre.lower()}:{base.name}")
+
+
 DEGREE_MOVES: dict[int, tuple[int, ...]] = {
     0: (2, 3, 5, 6),
     1: (4, 6),
@@ -205,25 +289,29 @@ def _degree_path(seed: int, bars: int) -> list[int]:
     return path
 
 
-def _chord(key: str, mode: str, degree: int, octave: int, voices: int) -> tuple[int, ...]:
-    offsets = {3: (0, 2, 4), 4: (0, 2, 4, 6), 5: (0, 2, 4, 6, 8)}.get(voices, (0, 2, 4, 6))
-    return tuple(scale_note(key, mode, degree + offset, octave) for offset in offsets)
+def _chord(key: str, scale: str, degree: int, octave: int, voices: int, quality: str = "scale") -> tuple[int, ...]:
+    if quality == "scale":
+        offsets = {3: (0, 2, 4), 4: (0, 2, 4, 6), 5: (0, 2, 4, 6, 8)}.get(voices, (0, 2, 4, 6))
+        return tuple(scale_note(key, scale, degree + offset, octave) for offset in offsets)
+    # Named chord quality (dom7, maj7, power, …) stacked from the degree's root.
+    root = scale_note(key, scale, degree, octave)
+    return chord_from_root(root, quality, voices)
 
 
-def _harmony_notes(key: str, mode: str, degree: int, start: float, energy: float, style: Style, em: float) -> list[Note]:
-    chord = _chord(key, mode, degree, style.harmony_octave, style.harmony_voices)
+def _harmony_notes(key: str, scale: str, degree: int, start: float, energy: float, style: Style, em: float) -> list[Note]:
+    chord = _chord(key, scale, degree, style.harmony_octave, style.harmony_voices, style.chord_quality)
     velocity = _vel((64 + energy * 28 * style.dynamics) * style.harmony_gain * em)
     return [Note("harmony", pitch, start, 4.0, velocity) for pitch in chord]
 
 
-def _bass_notes(key: str, mode: str, degree: int, start: float, energy: float, style: Style, em: float) -> list[Note]:
+def _bass_notes(key: str, scale: str, degree: int, start: float, energy: float, style: Style, em: float) -> list[Note]:
     velocity = _vel((72 + energy * 24 * style.dynamics) * style.bass_gain * em)
     # When walking, step through chord tones (root, 3rd, 5th, 3rd, …).
     walk_degrees = (0, 2, 4, 2)
     notes: list[Note] = []
     for i, offset in enumerate(style.bass_offsets):
         deg = degree + (walk_degrees[i % len(walk_degrees)] if style.bass_walk else 0)
-        pitch = scale_note(key, mode, deg, style.bass_octave)
+        pitch = scale_note(key, scale, deg, style.bass_octave)
         notes.append(Note("bass", pitch, start + offset, style.bass_dur, velocity))
     return notes
 
@@ -239,8 +327,8 @@ def _drum_notes(start: float, energy: float, phrase_bar: int, style: Style, em: 
     return notes
 
 
-def _texture_notes(key: str, mode: str, degree: int, start: float, energy: float, style: Style, em: float) -> list[Note]:
-    chord = _chord(key, mode, degree, style.texture_octave, 4)
+def _texture_notes(key: str, scale: str, degree: int, start: float, energy: float, style: Style, em: float) -> list[Note]:
+    chord = _chord(key, scale, degree, style.texture_octave, 4, style.chord_quality)
     order = (*chord, chord[2 % len(chord)], chord[1 % len(chord)])
     steps = max(1, style.texture_steps)
     step_dur = 4.0 / steps
@@ -257,6 +345,27 @@ def _texture_notes(key: str, mode: str, degree: int, start: float, energy: float
     ]
 
 
+def _apply_swing(notes: list[Note], swing: float) -> list[Note]:
+    """Delay off-eighth notes for a swung/shuffle feel.
+
+    At ``swing=0`` (the default) notes are returned unchanged, so the straight
+    grid stays byte-identical. Higher values push any note on the "and" of a beat
+    (fractional offset 0.5) later — toward a triplet feel at ``swing=1`` — which is
+    what makes jazz/blues/lo-fi read as swung.
+    """
+    if swing <= 0.0:
+        return notes
+    shift = swing * (1.0 / 6.0)
+    swung: list[Note] = []
+    for note in notes:
+        beat = math.floor(note.start)
+        if abs((note.start - beat) - 0.5) < 1e-9:
+            swung.append(replace(note, start=beat + 0.5 + shift))
+        else:
+            swung.append(note)
+    return swung
+
+
 def compose_arrangement(
     *,
     title: str,
@@ -267,8 +376,13 @@ def compose_arrangement(
     strategy: str = "default",
     energy: float = 0.5,
     prompt: str = "",
+    genre: str | None = None,
 ) -> dict[str, Any]:
-    style = style_for(strategy)
+    # Genre overlay (groove/swing/scale/chord idiom) is detected from the prompt
+    # unless passed explicitly; None leaves the native kernel idiom untouched.
+    genre = genre or detect_genre(prompt)
+    style = resolve_style(strategy, genre)
+    scale = style.scale or mode  # a genre may swap the scale (dorian/blues/…)
     # Global intensity from the interpreted brief: 0.5 is neutral (em == 1.0, so
     # output is unchanged); lower = calmer/softer, higher = punchier.
     em = 0.7 + 0.6 * max(0.0, min(1.0, energy))
@@ -289,25 +403,29 @@ def compose_arrangement(
             degree = path[bar_cursor]
             bar_start = section_start + local_bar * 4.0
             if "harmony" in section.active_parts:
-                notes.extend(_harmony_notes(key, mode, degree, bar_start, section.energy, style, em))
+                notes.extend(_harmony_notes(key, scale, degree, bar_start, section.energy, style, em))
             if "texture" in section.active_parts:
-                notes.extend(_texture_notes(key, mode, degree, bar_start, section.energy, style, em))
+                notes.extend(_texture_notes(key, scale, degree, bar_start, section.energy, style, em))
             if "bass" in section.active_parts:
-                notes.extend(_bass_notes(key, mode, degree, bar_start, section.energy, style, em))
+                notes.extend(_bass_notes(key, scale, degree, bar_start, section.energy, style, em))
             if "drums" in section.active_parts:
                 notes.extend(_drum_notes(bar_start, section.energy, local_bar % 8, style, em))
             bar_cursor += 1
+
+    notes = _apply_swing(notes, style.swing)
 
     parts: dict[str, list[dict[str, Any]]] = {}
     for note in notes:
         parts.setdefault(note.part, []).append(note.to_dict())
 
     # Instrumentation follows the prompt (genre/mood/energy), varied per candidate
-    # by seed. The default kernel stays all-sine so the CLI/tests are byte-identical.
-    if prompt and style.name != "default":
-        voices = select_voices(prompt, seed=seed, energy=energy, strategy=style.name)
+    # by seed and keyed to the base strategy (independent of the genre overlay, which
+    # drives groove/scale/chords). The default kernel stays all-sine so the CLI/tests
+    # are byte-identical.
+    if prompt and strategy != "default":
+        voices = select_voices(prompt, seed=seed, energy=energy, strategy=strategy)
     else:
-        voices = voices_for(style.name)
+        voices = voices_for(strategy)
 
     return {
         "schema": "rezn-ai.arrangement.v1",
@@ -315,6 +433,8 @@ def compose_arrangement(
             "title": title,
             "key": key,
             "mode": mode,
+            "scale": scale,
+            "genre": genre,
             "tempo": float(tempo),
             "seed": int(seed),
             "strategy": style.name,
@@ -331,5 +451,7 @@ def compose_arrangement(
             "generator": "rezn_ai.music.composition.compose_arrangement",
             "generator_version": __version__,
             "style": style.name,
+            "genre": genre,
+            "swing": style.swing,
         },
     }

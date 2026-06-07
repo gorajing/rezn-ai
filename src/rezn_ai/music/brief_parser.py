@@ -43,6 +43,12 @@ _GENRE_TEMPO: dict[str, int] = {
     "trap": 140,
     "drill": 142,
     "pop": 112,
+    # Genres handled by the composition genre-overlay (music.composition.GENRES).
+    "jazz": 112,
+    "blues": 100,
+    "rock": 120,
+    "soul": 96,
+    "reggae": 78,
 }
 
 _MINOR_WORDS = (
