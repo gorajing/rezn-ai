@@ -134,6 +134,38 @@ class AgentMemoryClient:
         facts = [self._fact_from_memory(item) for item in memories]
         return TasteRecall(facts=facts, bias=derive_bias(facts, brief=brief))
 
+    # ── Cleanup (delete-by-id) ─────────────────────────────────────────────────
+
+    def find_memories(self, *, owner_id: str, text: str = "", limit: int = 100) -> list[dict]:
+        """Raw long-term memories (dicts incl. their ``id``) for one owner — for
+        cleanup review. Unlike ``recall_taste`` this keeps the ids needed to delete.
+        """
+        payload = {
+            "text": text or " ",
+            "limit": limit,
+            "filter": {
+                "ownerId": {"eq": self._safe_id(owner_id)},
+                "namespace": {"eq": self.namespace},
+            },
+            "filterOp": "all",
+        }
+        data = self._post_json(self._path("long-term-memory/search"), payload)
+        return self._extract_memories(data)
+
+    def delete_long_term_memory(self, memory_ids: list[str]) -> int:
+        """Delete long-term memories by id via the REST endpoint — never a raw Redis
+        DEL, which would orphan the Iris vector index. Returns the count requested;
+        raises on a non-2xx response so a failed purge is loud, not silent.
+        """
+        if not memory_ids:
+            return 0
+        resp = self._client.delete(
+            self._path("long-term-memory"),
+            params=[("memory_ids", mid) for mid in memory_ids],
+        )
+        resp.raise_for_status()
+        return len(memory_ids)
+
     # ── Helpers ──────────────────────────────────────────────────────────────
 
     @staticmethod

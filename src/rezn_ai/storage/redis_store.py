@@ -131,6 +131,17 @@ def taste_decisions_key(producer_id: str) -> str:
     return f"rezn:taste:{producer_id}:decisions"
 
 
+# Ephemeral per-run state safe to purge between demos. Learned state — the
+# rezn:lessons:* and rezn:taste:* families — is deliberately NOT listed here.
+_EPHEMERAL_PREFIXES = (
+    "rezn:batches:",     # batch JSON
+    "rezn:batch:",       # per-batch candidates ZSET + events stream
+    "rezn:candidates:",  # candidate hashes
+    "rezn:feedback:",    # curation feedback
+    "rezn:refine:",      # once-per-parent armmut markers
+)
+
+
 def encode_json(payload: Any) -> str:
     value = asdict(payload) if is_dataclass(payload) else payload
     return json.dumps(value, sort_keys=True)
@@ -368,6 +379,22 @@ class RedisStore:
         the marker until explicitly cleared.
         """
         return bool(self._r.set(key, "1", nx=True, ex=ttl_seconds))
+
+    def purge_demo_state(self, *, execute: bool = False) -> dict[str, int]:
+        """SCAN and (when ``execute``) UNLINK ephemeral demo run-state, always
+        preserving learned state (rezn:lessons:*, rezn:taste:*). Strictly scoped to
+        ``_EPHEMERAL_PREFIXES`` — never FLUSHDB. Dry-run by default; returns a
+        ``{"ephemeral": found, "deleted": removed}`` report.
+        """
+        keys: set[str] = set()
+        for prefix in _EPHEMERAL_PREFIXES:
+            keys.update(self._r.scan_iter(match=f"{prefix}*", count=500))
+        key_list = list(keys)
+        deleted = 0
+        if execute and key_list:
+            for i in range(0, len(key_list), 500):
+                deleted += int(self._r.unlink(*key_list[i : i + 500]))
+        return {"ephemeral": len(key_list), "deleted": deleted}
 
     def append_decision(self, producer_id: str, decision: dict[str, Any]) -> None:
         """Append a policy-update / curation decision to the producer's stream."""
