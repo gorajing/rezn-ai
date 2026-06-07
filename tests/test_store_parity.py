@@ -36,6 +36,53 @@ def _candidate() -> Candidate:
     )
 
 
+def test_taste_vector_roundtrip_and_count(store):
+    assert store.get_taste_vector("p1") == {}  # empty -> no bias
+    store.save_taste_vector("p1", {"kick.drive": 0.3, "hat.brightness": 0.5}, count=4)
+    vec = store.get_taste_vector("p1")
+    assert vec["kick.drive"] == 0.3
+    assert vec["hat.brightness"] == 0.5
+    assert vec["__count__"] == 4
+    # producers are isolated
+    assert store.get_taste_vector("p2") == {}
+
+
+def test_save_taste_vector_replaces_prior(store):
+    store.save_taste_vector("p1", {"kick.drive": 0.3}, count=1)
+    store.save_taste_vector("p1", {"hat.brightness": 0.2}, count=2)
+    vec = store.get_taste_vector("p1")
+    assert "kick.drive" not in vec  # replaced, not merged
+    assert vec["hat.brightness"] == 0.2
+    assert vec["__count__"] == 2
+
+
+def test_prompt_arms_accumulate_reward(store):
+    assert store.get_prompt_arms("p1") == {}
+    store.update_prompt_arm("p1", "groove_architect:A1", 1.0)
+    store.update_prompt_arm("p1", "groove_architect:A1", 0.5)
+    store.update_prompt_arm("p1", "groove_architect:B1", 0.2)
+    arms = store.get_prompt_arms("p1")
+    assert arms["groove_architect:A1"] == 1.5  # accumulated
+    assert arms["groove_architect:B1"] == 0.2
+
+
+def test_profile_snapshot_roundtrip(store):
+    assert store.get_profile("p1", "prof_x") is None
+    snap = {"profile_id": "prof_x", "features": {"kick.drive": 0.4}}
+    store.save_profile("p1", "prof_x", snap)
+    assert store.get_profile("p1", "prof_x") == snap
+    assert store.get_profile("p1", "prof_missing") is None
+
+
+def test_decisions_stream_append_and_read(store):
+    assert store.read_decisions("p1") == []
+    store.append_decision("p1", {"batch_id": "b1", "reason": "punchier"})
+    store.append_decision("p1", {"batch_id": "b2", "reason": "sparser"})
+    decisions = store.read_decisions("p1", count=10)
+    assert len(decisions) == 2
+    assert {d["reason"] for d in decisions} == {"punchier", "sparser"}
+
+
 def test_candidate_provenance_roundtrips_on_both_stores(store):
     store.save_candidate(_candidate())
     got = store.get_candidate("cand_x")

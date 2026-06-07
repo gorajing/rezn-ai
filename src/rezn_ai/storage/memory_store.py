@@ -20,6 +20,11 @@ class InMemoryStore:
         self._rankings: dict[str, dict[str, float]] = {}   # batch_id -> {candidate_id: score}
         self._lessons: list[tuple[float, MemoryLesson]] = []
         self._feedback: dict[str, dict[str, Any]] = {}
+        # Per-producer policy / profile store (mirrors RedisStore for parity).
+        self._taste_vectors: dict[str, dict[str, float]] = {}
+        self._prompt_arms: dict[str, dict[str, float]] = {}
+        self._profiles: dict[str, dict[str, dict[str, Any]]] = {}
+        self._decisions: dict[str, list[dict[str, Any]]] = {}
 
     # ── Batches ──────────────────────────────────────────────────────────────
 
@@ -82,6 +87,38 @@ class InMemoryStore:
     def list_memories(self) -> list[MemoryLesson]:
         ranked = sorted(self._lessons, key=lambda x: x[0], reverse=True)
         return [lesson.model_copy(deep=True) for _, lesson in ranked]
+
+    # ── Policy / profile store (parity with RedisStore) ────────────────────────
+
+    def get_taste_vector(self, producer_id: str) -> dict[str, float]:
+        return deepcopy(self._taste_vectors.get(producer_id, {}))
+
+    def save_taste_vector(self, producer_id: str, vector: dict[str, float], count: int = 0) -> None:
+        stored: dict[str, float] = {k: float(v) for k, v in vector.items() if k != "__count__"}
+        stored["__count__"] = int(count)
+        self._taste_vectors[producer_id] = stored  # replace, not merge
+
+    def get_prompt_arms(self, producer_id: str) -> dict[str, float]:
+        return dict(self._prompt_arms.get(producer_id, {}))
+
+    def update_prompt_arm(self, producer_id: str, arm: str, reward: float) -> None:
+        arms = self._prompt_arms.setdefault(producer_id, {})
+        arms[arm] = arms.get(arm, 0.0) + float(reward)
+
+    def save_profile(self, producer_id: str, profile_id: str, snapshot: dict[str, Any]) -> None:
+        self._profiles.setdefault(producer_id, {})[profile_id] = deepcopy(snapshot)
+
+    def get_profile(self, producer_id: str, profile_id: str) -> dict[str, Any] | None:
+        snap = self._profiles.get(producer_id, {}).get(profile_id)
+        return deepcopy(snap) if snap is not None else None
+
+    def append_decision(self, producer_id: str, decision: dict[str, Any]) -> None:
+        self._decisions.setdefault(producer_id, []).append(deepcopy(decision))
+
+    def read_decisions(self, producer_id: str, count: int = 50) -> list[dict[str, Any]]:
+        items = self._decisions.get(producer_id, [])
+        window = items[-count:] if count else items
+        return [deepcopy(d) for d in window]
 
     # ── Healthcheck ────────────────────────────────────────────────────────────
 

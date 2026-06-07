@@ -113,6 +113,24 @@ def lessons_dedup_key() -> str:
     return "rezn:lessons:dedup"
 
 
+# ── Per-producer policy / profile store (Redis DRIVES the next generation) ──────
+
+def taste_profile_weights_key(producer_id: str) -> str:
+    return f"rezn:taste:{producer_id}:profile_weights"
+
+
+def taste_prompt_arms_key(producer_id: str) -> str:
+    return f"rezn:taste:{producer_id}:prompt_arms"
+
+
+def taste_profile_key(producer_id: str, profile_id: str) -> str:
+    return f"rezn:taste:{producer_id}:profiles:{profile_id}"
+
+
+def taste_decisions_key(producer_id: str) -> str:
+    return f"rezn:taste:{producer_id}:decisions"
+
+
 def encode_json(payload: Any) -> str:
     value = asdict(payload) if is_dataclass(payload) else payload
     return json.dumps(value, sort_keys=True)
@@ -293,6 +311,54 @@ class RedisStore:
         lesson = MemoryLesson.model_validate_json(raw)
         lesson.improvement_delta = float(score)
         return lesson
+
+    # ── Policy / profile store: the live taste vector + prompt-arms bandit ──────
+    # Redis owns "what changes next": a per-producer feature taste vector, a
+    # prompt-arms reward ZSET, resolved profile snapshots, and a decisions stream.
+
+    def get_taste_vector(self, producer_id: str) -> dict[str, float]:
+        """The persistent feature->preference vector (+ an int ``__count__``). ``{}`` if absent."""
+        raw = self._r.hgetall(taste_profile_weights_key(producer_id))
+        out: dict[str, float] = {}
+        for field, value in raw.items():
+            out[field] = int(float(value)) if field == "__count__" else float(value)
+        return out
+
+    def save_taste_vector(self, producer_id: str, vector: dict[str, float], count: int = 0) -> None:
+        """Replace (not merge) the vector. ``count`` scales confidence in apply_taste."""
+        key = taste_profile_weights_key(producer_id)
+        mapping = {k: str(float(v)) for k, v in vector.items() if k != "__count__"}
+        mapping["__count__"] = str(int(count))
+        pipe = self._r.pipeline()
+        pipe.delete(key)
+        pipe.hset(key, mapping=mapping)
+        pipe.execute()
+
+    def get_prompt_arms(self, producer_id: str) -> dict[str, float]:
+        """Prompt-arm -> accumulated reward (the bandit reads argmax). ``{}`` if absent."""
+        entries = self._r.zrange(taste_prompt_arms_key(producer_id), 0, -1, withscores=True)
+        return {member: float(score) for member, score in entries}
+
+    def update_prompt_arm(self, producer_id: str, arm: str, reward: float) -> None:
+        """Accumulate reward onto a prompt arm (ZINCRBY)."""
+        self._r.zincrby(taste_prompt_arms_key(producer_id), float(reward), arm)
+
+    def save_profile(self, producer_id: str, profile_id: str, snapshot: dict[str, Any]) -> None:
+        self._r.set(taste_profile_key(producer_id, profile_id), json.dumps(snapshot))
+
+    def get_profile(self, producer_id: str, profile_id: str) -> dict[str, Any] | None:
+        raw = self._r.get(taste_profile_key(producer_id, profile_id))
+        return json.loads(raw) if raw else None
+
+    def append_decision(self, producer_id: str, decision: dict[str, Any]) -> None:
+        """Append a policy-update / curation decision to the producer's stream."""
+        self._r.xadd(taste_decisions_key(producer_id), {"data": json.dumps(decision)})
+
+    def read_decisions(self, producer_id: str, count: int = 50) -> list[dict[str, Any]]:
+        """The most recent ``count`` decisions (oldest-first within the window)."""
+        entries = self._r.xrange(taste_decisions_key(producer_id))
+        decisions = [json.loads(fields["data"]) for _id, fields in entries]
+        return decisions[-count:] if count else decisions
 
     # ── Healthcheck ──────────────────────────────────────────────────────────
 
