@@ -97,3 +97,46 @@ def test_strategies_distinct_within_genre():
     }
     feats = {s: tuple(sorted(_kit_features(k).items())) for s, k in kits.items()}
     assert len(set(feats.values())) == len(feats)
+
+
+# ── PromptPolicy + SoundProfile provenance (Workstream B) ─────────────────────
+
+def test_prompt_policy_roundtrip():
+    from rezn_ai.music.sound_profile import PromptPolicy
+
+    p = PromptPolicy(arm="groove_architect:A1", descriptors=("punchy", "tight"),
+                     avoid=("muddy",), version=2)
+    assert PromptPolicy.from_dict(p.to_dict()) == p
+
+
+def test_prompt_policy_defaults_are_empty():
+    from rezn_ai.music.sound_profile import PromptPolicy
+
+    p = PromptPolicy()
+    assert p.arm == "base" and p.descriptors == () and p.avoid == () and p.version == 0
+
+
+def test_sound_profile_snapshot_carries_provenance():
+    from rezn_ai.music.sound_profile import PromptPolicy
+
+    sp = SoundProfile(
+        arrangement=None, voices={"bass": "reese"}, drum_kit=DrumKit.kernel(),
+        prompt_policy=PromptPolicy(arm="A1", descriptors=("punchy",)),
+        profile_id="prof_1", parent_profile_id="prof_0", policy_version=2,
+        internal_prompt="tight 909 groove, restrained bass",
+    )
+    snap = sp.to_snapshot()
+    assert snap["profile_id"] == "prof_1"
+    assert snap["parent_profile_id"] == "prof_0"
+    assert snap["policy_version"] == 2
+    assert snap["internal_prompt"] == "tight 909 groove, restrained bass"
+    assert snap["voices"] == {"bass": "reese"}
+    assert snap["drum_kit"]["name"] == "kernel"
+    assert snap["prompt_policy"]["arm"] == "A1"
+    assert snap["features"]["kick.drive"] == 0.0
+
+
+def test_sound_profile_provenance_defaults_keep_existing_construction():
+    # Existing 3-arg keyword construction still works (no provenance required).
+    sp = SoundProfile(arrangement=None, voices={}, drum_kit=DrumKit.kernel())
+    assert sp.profile_id == "" and sp.prompt_policy is None and sp.policy_version == 0

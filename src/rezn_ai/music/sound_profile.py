@@ -98,6 +98,38 @@ FEATURE_SPECS: dict[str, FeatureSpec] = {
 
 
 # --------------------------------------------------------------------------- #
+# PromptPolicy — how the per-candidate INTERNAL prompt is built/mutated.
+# The UI example prompts are starters only; the internal candidate prompt is
+# generated from the SoundProfile + this policy (an explainable prompt-arms
+# bandit), which mutates around approved traits and avoids rejected ones.
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class PromptPolicy:
+    arm: str = "base"                      # bandit arm id (A/B/C/D -> A1/B1/...)
+    descriptors: tuple[str, ...] = ()      # traits to emphasize (approved/strategy)
+    avoid: tuple[str, ...] = ()            # traits to avoid (learned from rejections)
+    version: int = 0                       # policy version that produced this arm
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "arm": self.arm,
+            "descriptors": list(self.descriptors),
+            "avoid": list(self.avoid),
+            "version": self.version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PromptPolicy":
+        return cls(
+            arm=data.get("arm", "base"),
+            descriptors=tuple(data.get("descriptors", ())),
+            avoid=tuple(data.get("avoid", ())),
+            version=int(data.get("version", 0)),
+        )
+
+
+# --------------------------------------------------------------------------- #
 # SoundProfile
 # --------------------------------------------------------------------------- #
 
@@ -106,10 +138,30 @@ class SoundProfile:
     arrangement: "Style"
     voices: dict[str, str]
     drum_kit: DrumKit
+    # Provenance (optional; defaults keep the existing 3-field construction valid):
+    prompt_policy: "PromptPolicy | None" = None
+    profile_id: str = ""
+    parent_profile_id: str | None = None
+    policy_version: int = 0
+    internal_prompt: str = ""
 
     def features(self) -> dict[str, float]:
         """The learnable controllable features (dotted keys match FEATURE_SPECS)."""
         return _kit_features(self.drum_kit)
+
+    def to_snapshot(self) -> dict[str, Any]:
+        """JSON-serializable snapshot persisted on the candidate (Candidate.sound_profile)."""
+        return {
+            "profile_id": self.profile_id,
+            "parent_profile_id": self.parent_profile_id,
+            "policy_version": self.policy_version,
+            "internal_prompt": self.internal_prompt,
+            "style": getattr(self.arrangement, "name", None),
+            "voices": dict(self.voices),
+            "drum_kit": self.drum_kit.to_dict(),
+            "prompt_policy": self.prompt_policy.to_dict() if self.prompt_policy else None,
+            "features": self.features(),
+        }
 
 
 # --------------------------------------------------------------------------- #
