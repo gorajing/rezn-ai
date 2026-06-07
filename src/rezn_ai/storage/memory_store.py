@@ -42,12 +42,6 @@ class InMemoryStore:
         batch.events.append(event.model_copy(deep=True))
         return self.get_batch(batch_id)
 
-    def get_stream_events(self, batch_id: str) -> list[dict[str, Any]]:
-        batch = self._batches.get(batch_id)
-        if batch is None:
-            return []
-        return [{"stream_id": str(i), "type": e.type, "message": e.message} for i, e in enumerate(batch.events)]
-
     # ── Candidates ─────────────────────────────────────────────────────────────
 
     def save_candidate(self, candidate: Candidate) -> Candidate:

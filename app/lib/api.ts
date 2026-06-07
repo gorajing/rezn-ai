@@ -1,7 +1,4 @@
-// Live client for the REZN backend (src/rezn_ai/api). Replaces the mock-data
-// layer in app/control-room with real calls to the FastAPI service.
-//
-// Set NEXT_PUBLIC_API_URL to point at the API (defaults to local uvicorn).
+// Live client for the REZN FastAPI backend (src/rezn_ai/api).
 
 import type { Candidate, CandidateStatus, ScoreDetail } from "../control-room/types";
 
@@ -200,6 +197,12 @@ export interface DoctorResponse {
   ok: boolean;
   checks: Record<string, boolean>;
   notes: string[];
+  orchestration?: {
+    composer_strategies: string[];
+    batch_pipeline: Array<{ agent_id: string; weave_op: string; description: string; phase: string }>;
+    refine_pipeline: Array<{ agent_id: string; weave_op: string; description: string; phase: string }>;
+    curation_actors: Array<{ agent_id: string; weave_op: string; description: string; phase: string }>;
+  };
 }
 
 export const api = {

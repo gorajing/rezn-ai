@@ -1,7 +1,7 @@
 "use client";
 
 import type { BatchStatus, Candidate } from "../types";
-import { EXAMPLE_PROMPTS } from "../mock-data";
+import { EXAMPLE_PROMPTS } from "../ui-defaults";
 import { CandidateCard } from "./CandidateCard";
 import { SparkIcon } from "./icons";
 

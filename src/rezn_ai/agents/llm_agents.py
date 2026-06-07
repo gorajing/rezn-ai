@@ -117,14 +117,17 @@ def _parse_json_object(content: str) -> dict:
 # propose_plan: pre-composition creative nudges
 # --------------------------------------------------------------------------- #
 
-def _fallback_plan(strategy: str) -> PlanProposal:
+def _fallback_plan(strategy: str, *, nudges: "RefinementNudges | None" = None) -> PlanProposal:
+    from .refinement_nudges import RefinementNudges, nudges_from_guidance
+
+    n = nudges or RefinementNudges()
     return PlanProposal(
         strategy=strategy,
-        seed_jitter=0,
-        tempo_delta=0.0,
+        seed_jitter=n.seed_jitter,
+        tempo_delta=n.tempo_delta,
         mode=None,
-        intent=f"deterministic {strategy} variation",
-        source="fallback",
+        intent=n.intent if n.has_nudges else f"deterministic {strategy} variation",
+        source="fallback+guidance" if n.has_nudges else "fallback",
     )
 
 
@@ -182,15 +185,25 @@ def _llm_propose_plan(
 
 @weave_op("propose_plan")
 def propose_plan(
-    brief: CreativeBrief, strategy: str, *, guidance: list[str] | None = None
+    brief: CreativeBrief,
+    strategy: str,
+    *,
+    guidance: list[str] | None = None,
+    nudges: "RefinementNudges | None" = None,
 ) -> PlanProposal:
     """Propose creative nudges for a candidate (W&B Inference, deterministic fallback).
 
     ``guidance`` carries the producer's prior taste signals (recalled from Agent
     Memory). It only shapes the live LLM prompt; the deterministic fallback ignores
     it, so reproducibility and the test suite are unchanged.
+
+    When ``nudges`` is supplied (refinement path), the deterministic fallback applies
+    those bounded adjustments even without an LLM; live inference still runs when enabled.
     """
-    fallback = _fallback_plan(strategy)
+    from .refinement_nudges import RefinementNudges, nudges_from_guidance
+
+    det_nudges = nudges or nudges_from_guidance(guidance)
+    fallback = _fallback_plan(strategy, nudges=det_nudges)
     if not inference_enabled():
         if inference_required():
             raise RuntimeError(

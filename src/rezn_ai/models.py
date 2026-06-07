@@ -124,3 +124,4 @@ class DoctorResponse(BaseModel):
     ok: bool
     checks: dict[str, bool]
     notes: list[str] = Field(default_factory=list)
+    orchestration: dict[str, Any] = Field(default_factory=dict)

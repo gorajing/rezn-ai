@@ -143,9 +143,7 @@ What is wired today:
 
 - `app/layout.tsx` - wraps the app in the `CopilotKit` provider (`runtimeUrl="/api/copilotkit"`).
 - `app/api/copilotkit/route.ts` - the CopilotKit runtime endpoint (OpenAI service adapter).
-- `app/components/copilot-demo.tsx` - a `CopilotPopup` plus one `useCopilotReadable`
-  (mission status) and one `useCopilotAction` (`setMissionStatus`).
-- `app/page.tsx` - renders the existing control-room UI and mounts the demo component.
+- `app/control-room/ControlRoom.tsx` - live control room wired to the FastAPI backend via `CopilotBridge`.
 
 Other useful commands:
 

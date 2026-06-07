@@ -18,9 +18,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from ..agents.llm_agents import inference_enabled
+from ..agents.roster import orchestration_summary
 from ..config import is_truthy, production_mode, redis_required, validate_deployment
 from ..conductor import BatchConductor
-from ..generation.engine import LocalGeneratorEngine
 from ..generation.rezn_engine import ReznGeneratorEngine
 from ..memory.taste import build_taste_memory
 from ..models import (
@@ -78,8 +78,7 @@ def _build_store() -> InMemoryStore | Any:
 
     if required:
         raise RuntimeError(f"{reason} (REDIS_REQUIRED or REZN_PRODUCTION is set)")
-    logger.warning("%s — falling back to InMemoryStore (dev only; set REDIS_REQUIRED=true for production)", reason)
-    return InMemoryStore()
+    raise RuntimeError(f"{reason} — set REDIS_URL and REDIS_REQUIRED=true for production")
 
 
 app = FastAPI(
@@ -108,14 +107,8 @@ app.add_middleware(
 
 app.mount("/artifacts", StaticFiles(directory=ARTIFACTS_ROOT), name="artifacts")
 
-def _build_engine() -> Any:
-    """Default to the clean-room engine (``REZN_ENGINE=rezn``). The placeholder
-    ``LocalGeneratorEngine`` is blocked when ``REZN_PRODUCTION=true``."""
-    if os.getenv("REZN_ENGINE", "rezn").strip().lower() == "local":
-        if production_mode():
-            raise RuntimeError("REZN_ENGINE=local is not allowed when REZN_PRODUCTION=true")
-        logger.info("Using LocalGeneratorEngine (REZN_ENGINE=local)")
-        return LocalGeneratorEngine()
+def _build_engine() -> ReznGeneratorEngine:
+    """Production generator engine (clean-room synth + discriminating scorer)."""
     return ReznGeneratorEngine()
 
 
@@ -174,6 +167,7 @@ def doctor() -> DoctorResponse:
         "redis_streams": redis_status.get("streams_accessible", False),
         "redis_hashes": redis_status.get("hashes_accessible", False),
         "agent_memory": agent_memory_live,
+        "multi_agent_orchestration": True,
     }
     core_ok = checks["weave_import"] and checks["generator_engine"] and checks["artifacts_writable"]
     notes = [
@@ -185,7 +179,7 @@ def doctor() -> DoctorResponse:
                      if redis_ok else
                      ("not connected — startup should have failed (REDIS_REQUIRED/REZN_PRODUCTION)."
                       if redis_required() else
-                      "not connected — dev-only InMemoryStore. Set REDIS_URL + REDIS_REQUIRED=true for production.")),
+                      "not connected — set REDIS_URL + REDIS_REQUIRED=true.")),
         "Weave tracing: " + (f"on — uploading traces to {WEAVE_STATUS.project}."
                              if checks["weave_tracing"] else
                              "off — set WANDB_API_KEY to upload traces to W&B Weave."),
@@ -197,7 +191,7 @@ def doctor() -> DoctorResponse:
            "— configure AGENT_MEMORY_URL, AGENT_MEMORY_STORE_ID, AGENT_MEMORY_API_KEY "
            "(required when AGENT_MEMORY_REQUIRED or REZN_PRODUCTION is set)."),
     ]
-    return DoctorResponse(ok=core_ok, checks=checks, notes=notes)
+    return DoctorResponse(ok=core_ok, checks=checks, notes=notes, orchestration=orchestration_summary())
 
 
 # ── Batches ─────────────────────────────────────────────────────────────────
@@ -291,11 +285,19 @@ def list_lessons(limit: int = 5) -> list[dict]:
 # ── Producer taste memory (Redis Agent Memory) ───────────────────────────────
 
 @app.get("/api/taste")
-def taste_profile(limit: int = 5) -> dict:
-    """The producer's taste profile: active backend + the top remembered lessons."""
+def taste_profile(limit: int = 5, prompt: str = "dark melodic electronic") -> dict:
+    """The producer's taste profile: active backend + semantically recalled facts.
+
+    ``facts`` come from the taste backend (Agent Memory semantic search, or local
+    lesson recall). ``lessons`` are the legacy Redis sorted-set audit trail.
+    """
+    brief = CreativeBrief(prompt=prompt, key="F#", mode="minor", tempo=128.0)
+    recall = conductor.taste.recall_taste(producer_id=conductor.producer_id, brief=brief, limit=limit)
     return {
         "backend": conductor.taste.health(),
-        "memories": [lesson.model_dump() for lesson in store.recall_top_lessons(limit)],
+        "facts": [asdict(fact) for fact in recall.facts],
+        "bias_preview": asdict(recall.bias),
+        "lessons": [lesson.model_dump() for lesson in store.recall_top_lessons(limit)],
     }
 
 

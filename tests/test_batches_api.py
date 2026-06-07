@@ -25,8 +25,12 @@ def test_doctor_reports_engine_ready(client) -> None:
     body = client.get("/api/doctor").json()
     assert body["checks"]["generator_engine"] is True
     assert body["checks"]["weave_import"] is True
+    assert body["checks"]["multi_agent_orchestration"] is True
     assert "redis" in body["checks"]
     assert body["ok"] is True
+    orch = body["orchestration"]
+    assert len(orch["composer_strategies"]) == 5
+    assert any(a["weave_op"] == "compose_candidate" for a in orch["batch_pipeline"])
 
 
 # ── Batch generation + ranking ─────────────────────────────────────────────────

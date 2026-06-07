@@ -11,6 +11,7 @@ Everything here is pure and deterministic; the backends live in sibling modules.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -26,6 +27,9 @@ MAX_TEMPO_DELTA = 6.0
 # A mode is only forced when it clearly dominates the recalled taste weight.
 MODE_PREF_THRESHOLD = 0.6
 _VALID_MODES = ("minor", "major")
+# Detect approval vs rejection polarity from recalled memory text.
+_REJECT_RE = re.compile(r"\brejected\b", re.IGNORECASE)
+_APPROVE_RE = re.compile(r"\b(?:approved|selected as final|final)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -115,24 +119,34 @@ def derive_bias(facts: list[TasteFact], *, brief: CreativeBrief) -> PlanningBias
     sources: list[str] = []
     # Highest-weight fact texts become the suggestions threaded into the prompts.
     suggestions: list[str] = []
-    for fact in sorted(facts, key=lambda f: -max(0.0, float(f.weight))):
+    for fact in sorted(facts, key=lambda f: -abs(float(f.weight))):
         text = (fact.text or "").strip()
         if text and text not in suggestions and len(suggestions) < 5:
             suggestions.append(text)
 
     for fact in facts:
-        weight = max(0.0, float(fact.weight))
+        raw_weight = float(fact.weight)
+        magnitude = abs(raw_weight)
+        if magnitude == 0:
+            continue
         if fact.source not in sources:
             sources.append(fact.source)
-        if fact.strategy in STRATEGIES and weight > 0:
+        text = (fact.text or "").lower()
+        if _REJECT_RE.search(text) or raw_weight < 0:
+            signed = -magnitude
+        elif _APPROVE_RE.search(text):
+            signed = magnitude
+        else:
+            signed = magnitude  # neutral / ambiguous facts lean positive
+        if fact.strategy in STRATEGIES:
             strategy_boosts[fact.strategy] = round(
-                strategy_boosts.get(fact.strategy, 0.0) + weight, 4
+                strategy_boosts.get(fact.strategy, 0.0) + signed, 4
             )
-        if fact.mode in _VALID_MODES and weight > 0:
-            mode_weight[fact.mode] += weight
-        if fact.tempo is not None and weight > 0:
-            tempo_num += (float(fact.tempo) - brief.tempo) * weight
-            tempo_den += weight
+        if fact.mode in _VALID_MODES and signed > 0:
+            mode_weight[fact.mode] += magnitude
+        if fact.tempo is not None and signed > 0:
+            tempo_num += (float(fact.tempo) - brief.tempo) * magnitude
+            tempo_den += magnitude
 
     tempo_delta = 0.0
     if tempo_den > 0:
@@ -149,7 +163,11 @@ def derive_bias(facts: list[TasteFact], *, brief: CreativeBrief) -> PlanningBias
     notes: list[str] = []
     if strategy_boosts:
         top = max(strategy_boosts, key=lambda s: strategy_boosts[s])
-        notes.append(f"favours {top}")
+        if strategy_boosts[top] > 0:
+            notes.append(f"favours {top}")
+        bottom = min(strategy_boosts, key=lambda s: strategy_boosts[s])
+        if strategy_boosts[bottom] < 0:
+            notes.append(f"avoids {bottom}")
     if mode_pref:
         notes.append(f"prefers {mode_pref}")
     if tempo_delta:
