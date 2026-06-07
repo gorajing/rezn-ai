@@ -14,6 +14,7 @@ import weave
 
 from .agents.harness import APPROVE_BONUS, BASE_WEIGHT, MIN_WEIGHT, REJECT_PENALTY, _allocate
 from .generation.engine import CandidateResult, GeneratorEngine
+from .music.brief_parser import parse_musical_brief
 from .tracing.weave_client import weave_workspace_url
 from .models import (
     Batch,
@@ -66,12 +67,17 @@ class BatchConductor:
 
     @weave.op()
     def start_batch(self, request: BatchCreateRequest) -> Batch:
-        brief = request.brief
+        # The prompt drives the music: infer key/mode/tempo from the brief text
+        # (explicit "88 BPM" / "F# minor" win; genre -> tempo, mood -> mode, and a
+        # stable key from the text) so different prompts sound genuinely different.
+        raw = request.brief
+        params = parse_musical_brief(raw.prompt, default_mode=raw.mode, default_tempo=raw.tempo)
+        brief = raw.model_copy(update=params)
         batch_id = new_id("batch")
         self.store.save_batch(Batch(batch_id=batch_id, brief=brief, status="running"))
         self._event(
             batch_id, "batch.started",
-            f"Generating {brief.candidate_count} candidates for: {brief.prompt}",
+            f"{brief.prompt} → {brief.key} {brief.mode}, {brief.tempo:.0f} BPM, {brief.candidate_count} candidates",
             {"candidate_count": brief.candidate_count, "key": brief.key, "mode": brief.mode, "tempo": brief.tempo},
         )
 
