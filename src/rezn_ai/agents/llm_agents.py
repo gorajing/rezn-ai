@@ -142,7 +142,20 @@ def _coerce_plan(strategy: str, raw: dict) -> PlanProposal:
     )
 
 
-def _llm_propose_plan(brief: CreativeBrief, strategy: str) -> PlanProposal:
+def _guidance_block(guidance: list[str] | None) -> str:
+    """Render the producer's prior taste signals as a prompt section, or ''."""
+    if not guidance:
+        return ""
+    lines = "\n".join(f"- {g}" for g in guidance[:5])
+    return (
+        "\nThe producer's prior curation on similar briefs (honor it where it fits "
+        f"the strategy persona):\n{lines}\n"
+    )
+
+
+def _llm_propose_plan(
+    brief: CreativeBrief, strategy: str, guidance: list[str] | None = None
+) -> PlanProposal:
     client, model = _inference_client()
     persona = STRATEGY_PERSONAS.get(strategy, strategy)
     system = (
@@ -155,6 +168,7 @@ def _llm_propose_plan(brief: CreativeBrief, strategy: str) -> PlanProposal:
     user = (
         f"Brief: {brief.text}\nKey: {brief.key}\nMode: {brief.mode}\n"
         f"Tempo: {brief.tempo} BPM\nStrategy persona ({strategy}): {persona}\n"
+        f"{_guidance_block(guidance)}"
         "Give this candidate a distinct angle that fits the strategy persona."
     )
     response = client.chat.completions.create(
@@ -167,8 +181,15 @@ def _llm_propose_plan(brief: CreativeBrief, strategy: str) -> PlanProposal:
 
 
 @weave_op("propose_plan")
-def propose_plan(brief: CreativeBrief, strategy: str) -> PlanProposal:
-    """Propose creative nudges for a candidate (W&B Inference, deterministic fallback)."""
+def propose_plan(
+    brief: CreativeBrief, strategy: str, *, guidance: list[str] | None = None
+) -> PlanProposal:
+    """Propose creative nudges for a candidate (W&B Inference, deterministic fallback).
+
+    ``guidance`` carries the producer's prior taste signals (recalled from Agent
+    Memory). It only shapes the live LLM prompt; the deterministic fallback ignores
+    it, so reproducibility and the test suite are unchanged.
+    """
     fallback = _fallback_plan(strategy)
     if not inference_enabled():
         if inference_required():
@@ -178,7 +199,7 @@ def propose_plan(brief: CreativeBrief, strategy: str) -> PlanProposal:
             )
         return fallback
     try:
-        return _llm_propose_plan(brief, strategy)
+        return _llm_propose_plan(brief, strategy, guidance)
     except Exception as exc:
         if inference_required():
             raise RuntimeError(f"Live inference failed for propose_plan: {exc}") from exc
@@ -347,3 +368,116 @@ def interpret_brief(
         if inference_required():
             raise RuntimeError(f"Live inference failed for interpret_brief: {exc}") from exc
         return BriefInterpretation(**{**asdict(fallback), "source": f"fallback:{type(exc).__name__}"})
+
+
+# --------------------------------------------------------------------------- #
+# reflect_on_feedback: the reflector in the actor→critic→reflector loop
+# --------------------------------------------------------------------------- #
+#
+# After a batch is curated, this agent reads the previous songs (their scores and
+# critic reasons) together with the producer's approvals / rejections / notes, and
+# synthesizes concrete production directives for the *next* batch: what to keep,
+# what to change. Those directives are threaded into the composer agents' prompts,
+# so refinement makes meaningful, feedback-driven changes instead of blind reseeds.
+
+@dataclass(frozen=True)
+class Reflection:
+    """A concrete revision plan derived from prior songs + human feedback."""
+
+    keep: tuple[str, ...]
+    change: tuple[str, ...]
+    intent: str
+    source: str  # "wandb_inference" | "fallback" | "fallback:<Reason>"
+
+    def as_guidance(self) -> list[str]:
+        """Flatten into short prompt directives for the composer agents."""
+        out = [f"Keep: {k}" for k in self.keep] + [f"Change: {c}" for c in self.change]
+        return out[:6]
+
+
+def _fallback_reflection(signals: list[dict], notes: list[str]) -> Reflection:
+    """Deterministic reflection: keep what was approved / scored well, change the rest."""
+    keep: list[str] = []
+    change: list[str] = []
+    for s in signals:
+        strat = s.get("strategy", "candidate")
+        status = s.get("status", "generated")
+        if status in ("approved", "final"):
+            keep.append(f"{strat} direction the producer approved")
+        elif status == "rejected":
+            change.append(f"move away from the {strat} take the producer rejected")
+    for note in notes:
+        note = (note or "").strip()
+        if note:
+            change.append(note)
+    if not keep and signals:
+        top = max(signals, key=lambda s: float(s.get("technical_score", 0.0)))
+        keep.append(f"the {top.get('strategy', 'top')} arrangement (highest score)")
+    intent = "keep what was approved; address the producer's notes" if (keep or change) else "explore"
+    return Reflection(tuple(keep[:4]), tuple(change[:4]), intent, "fallback")
+
+
+def _llm_reflect(brief_text: str, signals: list[dict], notes: list[str]) -> Reflection:
+    client, model = _inference_client()
+    summary = "\n".join(
+        f"- {s.get('strategy')}: status={s.get('status')}, score={s.get('technical_score')}, "
+        f"critic={s.get('critic_score')} ({'; '.join(s.get('critic_reasons', [])[:3])})"
+        for s in signals
+    )
+    note_block = "\n".join(f"- {n}" for n in notes if n) or "(no written notes)"
+    system = (
+        "You are a music producer's assistant deciding how to improve the NEXT batch "
+        "of song candidates from the previous batch and the producer's feedback. "
+        "Respond with a compact JSON object only: keep (array of <=4 short strings to "
+        "preserve), change (array of <=4 short, concrete production changes to make), "
+        "intent (<=15 words). Be specific and musical (groove, density, harmony, energy, "
+        "register, dynamics)."
+    )
+    user = (
+        f"Brief: {brief_text}\nPrevious candidates:\n{summary}\n"
+        f"Producer notes:\n{note_block}\n"
+        "What should the next batch keep and change?"
+    )
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        temperature=0.5,
+        max_tokens=600,
+    )
+    raw = _parse_json_object(response.choices[0].message.content or "")
+    keep = tuple(str(x)[:120] for x in (raw.get("keep") or [])[:4])
+    change = tuple(str(x)[:120] for x in (raw.get("change") or [])[:4])
+    intent = str(raw.get("intent", "")).strip()[:200] or "refine from feedback"
+    return Reflection(keep, change, intent, "wandb_inference")
+
+
+@weave_op("reflect_on_feedback")
+def reflect_on_feedback(
+    brief_text: str, signals: list[dict], *, notes: list[str] | None = None
+) -> Reflection:
+    """Synthesize prior songs + human feedback into next-batch directives.
+
+    LLM-driven when inference is enabled; otherwise a deterministic reflection that
+    keeps approved strategies and turns rejections/notes into change directives.
+
+    Reflection is *advisory*: it shapes the composer prompts but the refinement
+    backbone (strategy reweighting, parent selection, threading the producer's
+    notes) works without it. So unlike the per-candidate agents, a runtime LLM
+    error here degrades to the deterministic reflection — which still incorporates
+    the feedback — rather than failing the producer's refine action, even in
+    production. A *misconfiguration* (claiming live inference while it is off) is
+    still surfaced as an error.
+    """
+    notes = notes or []
+    fallback = _fallback_reflection(signals, notes)
+    if not inference_enabled():
+        if inference_required():
+            raise RuntimeError(
+                "Live inference is required (REZN_PRODUCTION or REZN_INFERENCE_REQUIRED) "
+                "but REZN_ENABLE_INFERENCE is off or no API key is configured."
+            )
+        return fallback
+    try:
+        return _llm_reflect(brief_text, signals, notes)
+    except Exception as exc:  # advisory: keep the deterministic reflection (still feedback-aware)
+        return Reflection(fallback.keep, fallback.change, fallback.intent, f"fallback:{type(exc).__name__}")

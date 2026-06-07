@@ -49,6 +49,10 @@ class PlanningBias:
     mode_pref: str | None = None
     notes: list[str] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
+    # Free-text taste signals (the producer's prior curation, including any notes
+    # they left). Threaded into the composer agents' prompts so new songs reflect
+    # what the producer has been asking for. Does not affect deterministic planning.
+    suggestions: list[str] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -109,6 +113,12 @@ def derive_bias(facts: list[TasteFact], *, brief: CreativeBrief) -> PlanningBias
     tempo_num = 0.0
     tempo_den = 0.0
     sources: list[str] = []
+    # Highest-weight fact texts become the suggestions threaded into the prompts.
+    suggestions: list[str] = []
+    for fact in sorted(facts, key=lambda f: -max(0.0, float(f.weight))):
+        text = (fact.text or "").strip()
+        if text and text not in suggestions and len(suggestions) < 5:
+            suggestions.append(text)
 
     for fact in facts:
         weight = max(0.0, float(fact.weight))
@@ -151,6 +161,7 @@ def derive_bias(facts: list[TasteFact], *, brief: CreativeBrief) -> PlanningBias
         mode_pref=mode_pref,
         notes=notes,
         sources=sources,
+        suggestions=suggestions,
     )
 
 

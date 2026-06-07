@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import httpx
 import pytest
 
@@ -49,6 +50,30 @@ def test_derive_bias_tempo_is_clamped():
     facts = [TasteFact("fast", weight=1.0, strategy="energy_curve", tempo=200.0)]
     bias = derive_bias(facts, brief=_brief())  # brief tempo 128 -> raw +72, clamp +6
     assert bias.tempo_delta == 6.0
+
+
+def test_derive_bias_collects_suggestions_by_weight():
+    facts = [
+        TasteFact("rejected: too busy on top end", weight=0.4, strategy="texture_builder"),
+        TasteFact("approved tight groove", weight=2.0, strategy="groove_architect"),
+    ]
+    bias = derive_bias(facts, brief=_brief())
+    # Highest-weight fact first; both surfaced as prompt guidance.
+    assert bias.suggestions[0] == "approved tight groove"
+    assert "rejected: too busy on top end" in bias.suggestions
+
+
+def test_propose_plan_guidance_ignored_in_deterministic_mode(monkeypatch):
+    from rezn_ai.agents.llm_agents import propose_plan
+    from rezn_ai.agents.schemas import CreativeBrief as AgentBrief
+
+    monkeypatch.setenv("REZN_ENABLE_INFERENCE", "0")
+    monkeypatch.delenv("REZN_PRODUCTION", raising=False)
+    monkeypatch.delenv("REZN_INFERENCE_REQUIRED", raising=False)
+    brief = AgentBrief(text="x", key="D#", mode="minor", tempo=128.0)
+    plain = propose_plan(brief, "groove_architect")
+    guided = propose_plan(brief, "groove_architect", guidance=["make it darker"])
+    assert plain == guided  # guidance only shapes the live LLM prompt
 
 
 def test_derive_bias_mode_not_forced_when_split():
@@ -172,6 +197,25 @@ def test_agent_client_remember_writes_session_event_and_long_term():
     assert f"POST /v1/stores/{_STORE}/long-term-memory" in seen
 
 
+def test_agent_client_sanitizes_managed_memory_ids():
+    payloads: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+
+    _mock_client(handler).remember_curation(
+        producer_id="default",
+        session_id="batch_abc_123",
+        action="approved",
+        candidate=_candidate(),
+    )
+    assert payloads[0]["sessionId"] == "batch-abc-123"
+    memory = payloads[1]["memories"][0]
+    assert "_" not in memory["id"]
+    assert memory["sessionId"] == "batch-abc-123"
+
+
 def test_agent_client_rejected_action_skips_long_term():
     seen: list[str] = []
 
@@ -187,7 +231,7 @@ def test_agent_client_rejected_action_skips_long_term():
 def test_agent_client_recall_maps_memories_to_bias():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == f"/v1/stores/{_STORE}/long-term-memory/search"
-        return httpx.Response(200, json={"memories": [
+        return httpx.Response(200, json={"items": [
             {"text": "Producer approved a groove_architect candidate in D# minor at 128 bpm",
              "topics": ["groove_architect", "minor"], "score": 0.9},
         ]})

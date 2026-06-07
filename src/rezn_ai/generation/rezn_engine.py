@@ -59,7 +59,8 @@ class ReznGeneratorEngine:
             count=brief.candidate_count,
             bias=bias,
         )
-        results = [self._render(batch_id, artifacts_root, params, brief) for params in plan]
+        guidance = list(bias.suggestions) if bias is not None else None
+        results = [self._render(batch_id, artifacts_root, params, brief, guidance) for params in plan]
         results.sort(key=lambda r: r.technical_score, reverse=True)
         return results
 
@@ -71,11 +72,19 @@ class ReznGeneratorEngine:
         artifacts_root: Path,
         parent: Any,
         salt: int = 0,
+        *,
+        guidance: list[str] | None = None,
     ) -> CandidateResult:
         parent_params = CandidateParams(
             parent.strategy, parent.seed, parent.key, parent.mode, parent.tempo
         )
-        return self._render(batch_id, artifacts_root, variant_params(parent_params, salt), brief)
+        # Reflection/feedback directives shape the variant; fall back to the
+        # parent's own note when no explicit guidance was supplied.
+        if guidance is None and getattr(parent, "feedback", None):
+            guidance = [parent.feedback]
+        return self._render(
+            batch_id, artifacts_root, variant_params(parent_params, salt), brief, guidance
+        )
 
     @weave.op()
     def _render(
@@ -84,6 +93,7 @@ class ReznGeneratorEngine:
         artifacts_root: Path,
         params: CandidateParams,
         brief: CreativeBrief,
+        guidance: list[str] | None = None,
     ) -> CandidateResult:
         candidate_id = new_id("cand")
         candidate_dir = Path(artifacts_root) / "batches" / batch_id / candidate_id
@@ -99,7 +109,7 @@ class ReznGeneratorEngine:
             tempo=brief.tempo,
             candidate_count=brief.candidate_count,
         )
-        proposal = propose_plan(agent_brief, params.strategy)
+        proposal = propose_plan(agent_brief, params.strategy, guidance=guidance)
         seed = params.seed + proposal.seed_jitter
         tempo = max(60.0, min(200.0, params.tempo + proposal.tempo_delta))
         mode = proposal.mode or params.mode

@@ -78,9 +78,64 @@ def weave_workspace_url(project: str | None = None) -> str | None:
     return f"https://wandb.ai/{entity}/{name}/weave"
 
 
+def weave_call_url(call_id: str | None, project: str | None = None) -> str | None:
+    """Deep link to a single Weave call (the exact generation trace), or None."""
+    if not call_id:
+        return None
+    project_name = project or default_project_name()
+    if "/" not in project_name:
+        return None
+    entity, name = project_name.split("/", 1)
+    return f"https://wandb.ai/{entity}/{name}/r/call/{call_id}"
+
+
 def weave_op(name: str | None = None) -> Any:
     try:
         import weave  # type: ignore
     except ModuleNotFoundError:
         return lambda fn: fn
     return weave.op(name=name) if name else weave.op()
+
+
+# ── Human-in-the-loop feedback on traced calls ────────────────────────────────
+#
+# These let curation (approve / reject / variant / final) attach the human signal
+# to the exact Weave call that generated a candidate, so the producer's judgment
+# becomes first-class trace data: queryable, chartable, and usable to build
+# evaluation datasets from real usage. Feedback is observability — it is always
+# best-effort and never raises into the request path, even in production.
+
+
+def current_call_id() -> str | None:
+    """The id of the Weave call currently executing (inside an ``@weave.op``)."""
+    try:
+        import weave  # type: ignore
+
+        call = weave.get_current_call()
+        return getattr(call, "id", None) if call is not None else None
+    except Exception:
+        return None
+
+
+def add_call_feedback(
+    call_id: str | None, *, reaction: str | None = None, note: str | None = None
+) -> bool:
+    """Attach a reaction emoji and/or a note to a Weave call. Best-effort.
+
+    Returns True when at least one piece of feedback was recorded. Safe to call
+    when Weave is unavailable or tracing is off — it simply returns False.
+    """
+    if not call_id or (reaction is None and note is None):
+        return False
+    try:
+        import weave  # type: ignore
+
+        client = weave.init(default_project_name())
+        call = client.get_call(call_id)
+        if reaction:
+            call.feedback.add_reaction(reaction)
+        if note:
+            call.feedback.add_note(note)
+        return True
+    except Exception:
+        return False

@@ -14,12 +14,18 @@ from typing import Any
 import weave
 
 from .agents.harness import APPROVE_BONUS, BASE_WEIGHT, MIN_WEIGHT, REJECT_PENALTY, _allocate
-from .agents.llm_agents import interpret_brief
+from .agents.llm_agents import interpret_brief, reflect_on_feedback
 from .config import agent_memory_required
+from .eval.preference import composite_score, taste_alignment
 from .generation.engine import CandidateResult, GeneratorEngine
 from .memory.local import LocalTasteMemory
 from .memory.taste import TasteMemory
-from .tracing.weave_client import weave_workspace_url
+from .tracing.weave_client import (
+    add_call_feedback,
+    current_call_id,
+    weave_call_url,
+    weave_workspace_url,
+)
 from .models import (
     Batch,
     BatchCreateRequest,
@@ -50,6 +56,13 @@ class BatchConductor:
                 "REZN_PRODUCTION is set — configure the Redis Cloud Agent Memory service."
             )
         self.producer_id = os.getenv("AGENT_MEMORY_PRODUCER_ID", "default")
+
+    def _record_feedback(self, candidate: Candidate, *, reaction: str | None, note: str | None) -> None:
+        """Attach the human's judgment to the candidate's generation trace (best-effort)."""
+        if add_call_feedback(candidate.weave_call_id, reaction=reaction, note=note):
+            self._event(candidate.batch_id, "weave.feedback",
+                        f"Attached {reaction or 'note'} to the generation trace.",
+                        {"candidate_id": candidate.candidate_id, "reaction": reaction})
 
     def _record_taste(self, candidate: Candidate, action: str, note: str = "") -> None:
         """Append a curation decision to the producer's taste profile (best-effort)."""
@@ -100,6 +113,25 @@ class BatchConductor:
     def _event(self, batch_id: str, event_type: str, message: str, payload: dict | None = None) -> None:
         self.store.append_event(batch_id, BatchEvent(type=event_type, message=message, payload=payload or {}))
 
+    def _stamp_preference(
+        self, candidate: Candidate, strategy_boosts: dict[str, float] | None
+    ) -> None:
+        """Record the feedback-aware preference score on the candidate (transparent in Weave/UI).
+
+        Blends objective technical_score, the critic agent's judgment, and how
+        strongly the producer's recalled taste favors this strategy. Ranking still
+        uses technical_score; this signal drives parent selection during refinement.
+        """
+        align = taste_alignment(candidate.strategy, strategy_boosts)
+        critic = candidate.scores.get("critic_score")
+        candidate.scores["taste_alignment"] = round(align, 4)
+        candidate.scores["preference_score"] = composite_score(
+            technical=candidate.technical_score,
+            critic=critic,
+            alignment=align,
+            status=candidate.status,
+        )
+
     # ── Batch lifecycle ────────────────────────────────────────────────────────
 
     @weave.op()
@@ -140,12 +172,22 @@ class BatchConductor:
                     "tempo_delta": bias.tempo_delta,
                     "mode_pref": bias.mode_pref,
                     "sources": bias.sources,
+                    "suggestions": bias.suggestions,
                 },
             )
 
+        # The Weave call generating this batch — stamped on each candidate so human
+        # curation can attach reactions/notes onto the exact trace.
+        call_id = current_call_id()
+
         results = self.engine.orchestrate_batch(brief, batch_id, self.artifacts_root, bias=bias)
+        call_url = weave_call_url(call_id)
         for result in results:
             candidate = self._to_candidate(result, batch_id)
+            candidate.weave_call_id = call_id
+            if call_url:  # deep-link this candidate to its exact generation trace
+                candidate.trace_url = call_url
+            self._stamp_preference(candidate, bias.strategy_boosts)
             self.store.save_candidate(candidate)
             self._event(
                 batch_id, "candidate.generated",
@@ -175,6 +217,7 @@ class BatchConductor:
         self.store.save_feedback(candidate_id, {"decision": "approved"})
         self._remember(candidate, approved=True)
         self._record_taste(candidate, "approved")
+        self._record_feedback(candidate, reaction="👍", note=f"approved {candidate.strategy}")
         self._event(candidate.batch_id, "candidate.approved",
                     f"Approved {candidate.strategy} candidate.", {"candidate_id": candidate_id})
         return candidate
@@ -188,6 +231,7 @@ class BatchConductor:
         self.store.save_feedback(candidate_id, {"decision": "rejected", "note": note})
         self._remember(candidate, approved=False, note=note)
         self._record_taste(candidate, "rejected", note=note)
+        self._record_feedback(candidate, reaction="👎", note=f"rejected: {note}" if note else "rejected")
         self._event(candidate.batch_id, "candidate.rejected",
                     f"Rejected {candidate.strategy} candidate.", {"candidate_id": candidate_id, "note": note})
         return candidate
@@ -200,6 +244,7 @@ class BatchConductor:
             parent.feedback = note
         self.store.save_candidate(parent)
         self._record_taste(parent, "variant", note=note)
+        self._record_feedback(parent, reaction=None, note=f"variant requested: {note}" if note else "variant requested")
 
         batch = self.store.get_batch(parent.batch_id)
         salt = len(batch.candidates)
@@ -222,6 +267,7 @@ class BatchConductor:
         self.store.save_batch(batch)
         self._remember(candidate, approved=True, final=True)
         self._record_taste(candidate, "final")
+        self._record_feedback(candidate, reaction="🎯", note=f"selected as final ({candidate.strategy})")
         self._event(batch_id, "batch.final_selected",
                     f"Selected final candidate ({candidate.strategy}).", {"candidate_id": candidate_id})
         return self.store.get_batch(batch_id)
@@ -241,22 +287,51 @@ class BatchConductor:
                 weights[c.strategy] = max(MIN_WEIGHT, weights[c.strategy] - REJECT_PENALTY)
         return weights
 
-    def _best_parent(self, candidates: list[Candidate], strategy: str) -> Candidate:
-        """Pick the parent to mutate for a strategy: approved first, then top score."""
+    def _best_parent(
+        self, candidates: list[Candidate], strategy: str, boosts: dict[str, float] | None
+    ) -> Candidate:
+        """Pick the parent to mutate: approved first, then by feedback-aware preference."""
         pool = [c for c in candidates if c.strategy == strategy]
-        pool.sort(
-            key=lambda c: (c.status in ("approved", "final"), c.technical_score),
-            reverse=True,
-        )
+
+        def rank_key(c: Candidate) -> tuple:
+            pref = c.scores.get("preference_score")
+            if pref is None:
+                pref = composite_score(
+                    technical=c.technical_score,
+                    critic=c.scores.get("critic_score"),
+                    alignment=taste_alignment(c.strategy, boosts),
+                    status=c.status,
+                )
+            return (c.status in ("approved", "final"), float(pref))
+
+        pool.sort(key=rank_key, reverse=True)
         return pool[0]
+
+    def _reflect(self, parent_candidates: list[Candidate], brief_prompt: str):
+        """Run the reflector agent over the previous songs + the producer's notes."""
+        signals = [
+            {
+                "strategy": c.strategy,
+                "status": c.status,
+                "technical_score": c.technical_score,
+                "critic_score": c.scores.get("critic_score"),
+                "critic_reasons": (c.scores.get("critic", {}) or {}).get("reasons", []),
+            }
+            for c in parent_candidates
+        ]
+        notes = [c.feedback for c in parent_candidates if c.feedback]
+        return reflect_on_feedback(brief_prompt, signals, notes=notes)
 
     @weave.op()
     def refine_batch(self, parent_batch_id: str, candidate_count: int | None = None) -> Batch:
-        """Generate a child batch from a parent's human feedback.
+        """Generate a child batch that learns from the parent's feedback and songs.
 
-        Strategies that were approved get more of the next batch; rejected ones
-        shrink. Each child is a reproducible mutation of the best parent of its
-        strategy, so the lineage (and the "it improves" story) is traceable.
+        The reflector agent reads the previous candidates (scores + critic reasons)
+        and the producer's approvals/rejections/notes, and emits concrete keep/change
+        directives. Those — together with recalled cross-session taste — are threaded
+        into the composer agents so the new batch makes meaningful, feedback-driven
+        changes. Approved strategies still get more slots; parents are picked by the
+        feedback-aware preference score, and lineage stays traceable.
         """
         parent = self.store.get_batch(parent_batch_id)  # raises KeyError if missing
         parent_candidates = parent.candidates
@@ -272,6 +347,12 @@ class BatchConductor:
         approved = [c.candidate_id for c in parent_candidates if c.status in ("approved", "final")]
         rejected = [c.candidate_id for c in parent_candidates if c.status == "rejected"]
 
+        # Reflector: turn prior songs + feedback into next-batch directives.
+        reflection = self._reflect(parent_candidates, parent.brief.prompt)
+        # Cross-session taste, so refinement also reflects what the producer liked before.
+        recall = self.taste.recall_taste(producer_id=self.producer_id, brief=parent.brief)
+        guidance = list(reflection.as_guidance()) + list(recall.bias.suggestions)
+
         child_id = new_id("batch")
         self.store.save_batch(
             Batch(batch_id=child_id, brief=parent.brief, status="running", parent_batch_id=parent_batch_id)
@@ -286,13 +367,25 @@ class BatchConductor:
                 "rejected": rejected,
             },
         )
+        self._event(
+            child_id, "reflection",
+            f"Reflection ({reflection.source}): {reflection.intent}",
+            {"keep": list(reflection.keep), "change": list(reflection.change),
+             "source": reflection.source, "guidance": guidance},
+        )
 
+        call_id = current_call_id()
+        call_url = weave_call_url(call_id)
         for slot, strategy in enumerate(allocation):
-            parent_cand = self._best_parent(parent_candidates, strategy)
+            parent_cand = self._best_parent(parent_candidates, strategy, recall.bias.strategy_boosts)
             result = self.engine.generate_variant(
-                parent.brief, child_id, self.artifacts_root, parent_cand, salt=slot
+                parent.brief, child_id, self.artifacts_root, parent_cand, salt=slot, guidance=guidance
             )
             child = self._to_candidate(result, child_id, parent_id=parent_cand.candidate_id)
+            child.weave_call_id = call_id
+            if call_url:
+                child.trace_url = call_url
+            self._stamp_preference(child, recall.bias.strategy_boosts)
             self.store.save_candidate(child)
             self._event(
                 child_id, "candidate.generated",
