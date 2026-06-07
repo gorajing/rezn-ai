@@ -20,7 +20,7 @@ from rezn_ai import __version__
 from .arrangement import DEFAULT_FORM, section_start_beats, total_beats
 from .theory import chord_from_root, scale_note
 from .timbre import select_voices
-from .sound_profile import SoundProfile, apply_taste, resolve_kit
+from .sound_profile import DrumKit, SoundProfile, apply_taste, resolve_kit
 from ..provenance import utc_now
 
 
@@ -483,8 +483,9 @@ def compose_arrangement(
             "swing": style.swing,
         },
     }
-    # Kernel kit is omitted so the default arrangement stays byte-identical; a
-    # differentiated kit is recorded for reproducibility when present.
-    if profile.drum_kit.name != "kernel":
+    # Emit the kit only when it actually differs from the kernel (value equality, not
+    # name) — so a taste-modified but kernel-named kit isn't silently dropped, while
+    # the untouched default stays byte-identical.
+    if profile.drum_kit != DrumKit.kernel():
         result["drum_kit"] = profile.drum_kit.to_dict()
     return result
