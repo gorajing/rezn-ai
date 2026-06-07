@@ -36,6 +36,16 @@ def _candidate() -> Candidate:
     )
 
 
+def test_claim_once_is_atomic_at_most_once(store):
+    """claim_once returns True for the first claimer of a key and False thereafter —
+    the atomic primitive behind once-per-parent prompt-arm mutation."""
+    assert store.claim_once("rezn:refine:armmut:b1") is True
+    assert store.claim_once("rezn:refine:armmut:b1") is False
+    assert store.claim_once("rezn:refine:armmut:b1") is False
+    # A different key is independent.
+    assert store.claim_once("rezn:refine:armmut:b2") is True
+
+
 def test_taste_vector_roundtrip_and_count(store):
     assert store.get_taste_vector("p1") == {}  # empty -> no bias
     store.save_taste_vector("p1", {"kick.drive": 0.3, "hat.brightness": 0.5}, count=4)

@@ -350,6 +350,12 @@ class RedisStore:
         raw = self._r.get(taste_profile_key(producer_id, profile_id))
         return json.loads(raw) if raw else None
 
+    def claim_once(self, key: str) -> bool:
+        """Atomically claim ``key`` exactly once. Returns True for the first caller,
+        False thereafter — SET NX is atomic, so concurrent callers cannot both claim.
+        """
+        return bool(self._r.set(key, "1", nx=True))
+
     def append_decision(self, producer_id: str, decision: dict[str, Any]) -> None:
         """Append a policy-update / curation decision to the producer's stream."""
         self._r.xadd(taste_decisions_key(producer_id), {"data": json.dumps(decision)})

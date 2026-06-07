@@ -636,20 +636,14 @@ class BatchConductor:
         # changes are explainable.
         feature_deltas = self._update_policy(parent_batch_id) or {}
         # Prompt-arm evolution (reward + A->A1) is accumulative, so apply it at most
-        # once per parent batch — a retry of refine_batch must not re-reward or push
-        # A1->A2 (which could gate out the just-evolved arm).
-        armmut_key = f"armmut:{parent_batch_id}"
-        if self.store.get_profile(self.producer_id, armmut_key):
-            prompt_deltas: dict[str, str] = {}
-        else:
-            # Set the marker BEFORE mutating so a crash between the two can never let
-            # a retry re-reward / re-mutate the arms (at-most-once, not at-least-once).
-            try:
-                self.store.save_profile(self.producer_id, armmut_key, {"applied": True})
-            except Exception:
-                if agent_memory_required():
-                    raise
-            prompt_deltas = self._mutate_prompt_arms(parent)
+        # once per parent batch. claim_once is atomic (SET NX), so even concurrent
+        # refine_batch retries of the same parent cannot both evolve the arms.
+        armmut_key = f"rezn:refine:armmut:{self.producer_id}:{parent_batch_id}"
+        try:
+            claimed = self.store.claim_once(armmut_key)
+        except Exception:
+            claimed = True  # best-effort: if the claim store is down, still evolve once
+        prompt_deltas: dict[str, str] = self._mutate_prompt_arms(parent) if claimed else {}
         decided_count = len(approved) + len(rejected)
         confidence = round(min(1.0, decided_count / max(1, len(parent_candidates))), 4)
         policy_update = build_policy_update(

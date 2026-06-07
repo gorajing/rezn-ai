@@ -25,6 +25,7 @@ class InMemoryStore:
         self._prompt_arms: dict[str, dict[str, float]] = {}
         self._profiles: dict[str, dict[str, dict[str, Any]]] = {}
         self._decisions: dict[str, list[dict[str, Any]]] = {}
+        self._claims: set[str] = set()
 
     # ── Batches ──────────────────────────────────────────────────────────────
 
@@ -111,6 +112,13 @@ class InMemoryStore:
     def get_profile(self, producer_id: str, profile_id: str) -> dict[str, Any] | None:
         snap = self._profiles.get(producer_id, {}).get(profile_id)
         return deepcopy(snap) if snap is not None else None
+
+    def claim_once(self, key: str) -> bool:
+        """Atomically claim ``key`` exactly once (True for the first caller)."""
+        if key in self._claims:
+            return False
+        self._claims.add(key)
+        return True
 
     def append_decision(self, producer_id: str, decision: dict[str, Any]) -> None:
         self._decisions.setdefault(producer_id, []).append(deepcopy(decision))
