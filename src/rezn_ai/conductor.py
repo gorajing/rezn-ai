@@ -11,10 +11,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-import weave
-
-from .agents.harness import APPROVE_BONUS, BASE_WEIGHT, MIN_WEIGHT, REJECT_PENALTY, _allocate
+from .agents.harness import _allocate, reweight_from_candidates
 from .agents.llm_agents import interpret_brief, reflect_on_feedback
+from .agents.roster import COMPOSER_STRATEGIES
 from .config import agent_memory_required
 from .eval.preference import composite_score, taste_alignment
 from .eval.refinement_eval import compute_iteration_metrics, record_refinement_iteration
@@ -23,8 +22,8 @@ from .memory.local import LocalTasteMemory
 from .memory.taste import TasteFact, TasteMemory, TasteRecall, derive_bias
 from .tracing.weave_client import (
     add_call_feedback,
-    current_call_id,
     weave_call_url,
+    weave_op,
     weave_workspace_url,
 )
 from .models import (
@@ -134,6 +133,11 @@ class BatchConductor:
         return f"/artifacts/{rel.as_posix()}"
 
     def _to_candidate(self, result: CandidateResult, batch_id: str, *, parent_id: str | None = None) -> Candidate:
+        trace = (
+            weave_call_url(result.weave_call_id)
+            if result.weave_call_id
+            else weave_workspace_url()
+        )
         return Candidate(
             candidate_id=result.candidate_id,
             batch_id=batch_id,
@@ -148,7 +152,8 @@ class BatchConductor:
             audio_url=self._url(result.audio_path),
             arrangement_url=self._url(result.arrangement_path),
             midi_urls={part: self._url(p) for part, p in result.midi_paths.items()},
-            trace_url=weave_workspace_url(),
+            trace_url=trace,
+            weave_call_id=result.weave_call_id,
             parent_candidate_id=parent_id,
         )
 
@@ -176,7 +181,7 @@ class BatchConductor:
 
     # ── Batch lifecycle ────────────────────────────────────────────────────────
 
-    @weave.op()
+    @weave_op("conductor.start_batch")
     def start_batch(self, request: BatchCreateRequest) -> Batch:
         # The prompt drives the music: interpret the whole brief into key/mode/tempo/
         # energy (W&B Inference when enabled, deterministic keyword fallback otherwise).
@@ -197,6 +202,7 @@ class BatchConductor:
                 "candidate_count": brief.candidate_count,
                 "key": brief.key, "mode": brief.mode, "tempo": brief.tempo, "energy": brief.energy,
                 "intent": interp.intent, "interpretation_source": interp.source,
+                "composer_strategies": list(COMPOSER_STRATEGIES),
             },
         )
 
@@ -218,17 +224,9 @@ class BatchConductor:
                 },
             )
 
-        # The Weave call generating this batch — stamped on each candidate so human
-        # curation can attach reactions/notes onto the exact trace.
-        call_id = current_call_id()
-
         results = self.engine.orchestrate_batch(brief, batch_id, self.artifacts_root, bias=bias)
-        call_url = weave_call_url(call_id)
         for result in results:
             candidate = self._to_candidate(result, batch_id)
-            candidate.weave_call_id = call_id
-            if call_url:  # deep-link this candidate to its exact generation trace
-                candidate.trace_url = call_url
             self._stamp_preference(candidate, bias.strategy_boosts)
             self.store.save_candidate(candidate)
             self._event(
@@ -251,7 +249,7 @@ class BatchConductor:
 
     # ── Human-in-the-loop curation ───────────────────────────────────────────
 
-    @weave.op()
+    @weave_op("conductor.approve")
     def approve_candidate(self, candidate_id: str) -> Candidate:
         candidate = self.store.get_candidate(candidate_id)
         candidate.status = "approved"
@@ -264,7 +262,7 @@ class BatchConductor:
                     f"Approved {candidate.strategy} candidate.", {"candidate_id": candidate_id})
         return candidate
 
-    @weave.op()
+    @weave_op("conductor.reject")
     def reject_candidate(self, candidate_id: str, note: str = "") -> Candidate:
         candidate = self.store.get_candidate(candidate_id)
         candidate.status = "rejected"
@@ -278,7 +276,7 @@ class BatchConductor:
                     f"Rejected {candidate.strategy} candidate.", {"candidate_id": candidate_id, "note": note})
         return candidate
 
-    @weave.op()
+    @weave_op("conductor.request_variant")
     def request_variant(self, candidate_id: str, note: str = "") -> Candidate:
         parent = self.store.get_candidate(candidate_id)
         parent.status = "variant_requested"
@@ -298,7 +296,7 @@ class BatchConductor:
                     {"parent": candidate_id, "candidate_id": child.candidate_id})
         return child
 
-    @weave.op()
+    @weave_op("conductor.select_final")
     def select_final(self, batch_id: str, candidate_id: str) -> Batch:
         batch = self.store.get_batch(batch_id)  # raises KeyError if missing
         candidate = self.store.get_candidate(candidate_id)
@@ -317,17 +315,8 @@ class BatchConductor:
     # ── Feedback-driven refinement (the RL loop) ────────────────────────────────
 
     def _strategy_weights(self, candidates: list[Candidate]) -> dict[str, float]:
-        """Weight strategies by curation: approvals lift, rejections cut.
-
-        Reuses the harness constants so the API and the CLI refine loop agree.
-        """
-        weights = {c.strategy: BASE_WEIGHT for c in candidates}
-        for c in candidates:
-            if c.status in ("approved", "final"):
-                weights[c.strategy] += APPROVE_BONUS
-            elif c.status == "rejected":
-                weights[c.strategy] = max(MIN_WEIGHT, weights[c.strategy] - REJECT_PENALTY)
-        return weights
+        """Weight strategies by curation — traced as ``harness.reweight``."""
+        return reweight_from_candidates(candidates)
 
     def _best_parent(
         self, candidates: list[Candidate], strategy: str, boosts: dict[str, float] | None
@@ -364,7 +353,7 @@ class BatchConductor:
         notes = [c.feedback for c in parent_candidates if c.feedback]
         return reflect_on_feedback(brief_prompt, signals, notes=notes)
 
-    @weave.op()
+    @weave_op("conductor.refine_batch")
     def refine_batch(self, parent_batch_id: str, candidate_count: int | None = None) -> Batch:
         """Generate a child batch that learns from the parent's feedback and songs.
 
@@ -444,17 +433,12 @@ class BatchConductor:
                 },
             )
 
-        call_id = current_call_id()
-        call_url = weave_call_url(call_id)
         for slot, strategy in enumerate(allocation):
             parent_cand = self._best_parent(parent_candidates, strategy, recall.bias.strategy_boosts)
             result = self.engine.generate_variant(
                 parent.brief, child_id, self.artifacts_root, parent_cand, salt=slot, guidance=guidance
             )
             child = self._to_candidate(result, child_id, parent_id=parent_cand.candidate_id)
-            child.weave_call_id = call_id
-            if call_url:
-                child.trace_url = call_url
             self._stamp_preference(child, recall.bias.strategy_boosts)
             self.store.save_candidate(child)
             self._event(

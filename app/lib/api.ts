@@ -197,6 +197,12 @@ export interface DoctorResponse {
   ok: boolean;
   checks: Record<string, boolean>;
   notes: string[];
+  orchestration?: {
+    composer_strategies: string[];
+    batch_pipeline: Array<{ agent_id: string; weave_op: string; description: string; phase: string }>;
+    refine_pipeline: Array<{ agent_id: string; weave_op: string; description: string; phase: string }>;
+    curation_actors: Array<{ agent_id: string; weave_op: string; description: string; phase: string }>;
+  };
 }
 
 export const api = {

@@ -32,6 +32,7 @@ class CandidateResult:
     audio_path: Path
     midi_paths: dict[str, str] = field(default_factory=dict)
     params: Any | None = None
+    weave_call_id: str | None = None
 
 
 @runtime_checkable

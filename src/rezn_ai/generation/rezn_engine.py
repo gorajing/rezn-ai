@@ -9,8 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import weave
-
 if TYPE_CHECKING:
     from ..memory.taste import PlanningBias
 
@@ -25,6 +23,7 @@ from ..music.composition import compose_arrangement
 from ..music.midi import export_midi_parts
 from ..provenance import write_json
 from ..render.preview_synth import full_band_start_seconds, write_preview_wav
+from ..tracing.weave_client import current_call_id, weave_op
 from .engine import CandidateResult
 from .strategies import CandidateParams, plan_candidates, variant_params
 
@@ -36,7 +35,7 @@ class ReznGeneratorEngine:
         self.preview_seconds = preview_seconds
         self.sample_rate = sample_rate
 
-    @weave.op()
+    @weave_op("orchestrate_composers")
     def orchestrate_batch(
         self,
         brief: CreativeBrief,
@@ -58,7 +57,7 @@ class ReznGeneratorEngine:
         results.sort(key=lambda r: r.technical_score, reverse=True)
         return results
 
-    @weave.op()
+    @weave_op("compose_variant")
     def generate_variant(
         self,
         brief: CreativeBrief,
@@ -119,7 +118,7 @@ class ReznGeneratorEngine:
             nudges=nudges,
         )
 
-    @weave.op()
+    @weave_op("compose_candidate")
     def _render(
         self,
         batch_id: str,
@@ -205,6 +204,14 @@ class ReznGeneratorEngine:
                     "reasons": list(critic.reasons),
                     "source": critic.source,
                 },
+                "composer_plan": {
+                    "strategy": params.strategy,
+                    "seed_jitter": proposal.seed_jitter,
+                    "tempo_delta": proposal.tempo_delta,
+                    "mode": proposal.mode,
+                    "intent": proposal.intent,
+                    "source": proposal.source,
+                },
                 "refinement_nudges": {
                     "energy_delta": det_nudges.energy_delta,
                     "tempo_delta": det_nudges.tempo_delta,
@@ -218,4 +225,5 @@ class ReznGeneratorEngine:
             audio_path=audio_path,
             midi_paths=midi_paths,
             params=params,
+            weave_call_id=current_call_id(),
         )

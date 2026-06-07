@@ -58,6 +58,19 @@ def _strategy_weights(
     return weights
 
 
+@weave_op("harness.reweight")
+def reweight_from_candidates(candidates: list) -> dict[str, float]:
+    """Strategy weights from curation status (API conductor refine path)."""
+    strategies = sorted({c.strategy for c in candidates})
+    weights = {s: BASE_WEIGHT for s in strategies}
+    for c in candidates:
+        if c.status in ("approved", "final"):
+            weights[c.strategy] += APPROVE_BONUS
+        elif c.status == "rejected":
+            weights[c.strategy] = max(MIN_WEIGHT, weights[c.strategy] - REJECT_PENALTY)
+    return weights
+
+
 def _allocate(weights: dict[str, float], n: int) -> list[str]:
     """Allocate ``n`` candidate slots across strategies proportional to weight.
 

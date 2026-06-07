@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from ..agents.llm_agents import inference_enabled
+from ..agents.roster import orchestration_summary
 from ..config import is_truthy, production_mode, redis_required, validate_deployment
 from ..conductor import BatchConductor
 from ..generation.rezn_engine import ReznGeneratorEngine
@@ -166,6 +167,7 @@ def doctor() -> DoctorResponse:
         "redis_streams": redis_status.get("streams_accessible", False),
         "redis_hashes": redis_status.get("hashes_accessible", False),
         "agent_memory": agent_memory_live,
+        "multi_agent_orchestration": True,
     }
     core_ok = checks["weave_import"] and checks["generator_engine"] and checks["artifacts_writable"]
     notes = [
@@ -189,7 +191,7 @@ def doctor() -> DoctorResponse:
            "— configure AGENT_MEMORY_URL, AGENT_MEMORY_STORE_ID, AGENT_MEMORY_API_KEY "
            "(required when AGENT_MEMORY_REQUIRED or REZN_PRODUCTION is set)."),
     ]
-    return DoctorResponse(ok=core_ok, checks=checks, notes=notes)
+    return DoctorResponse(ok=core_ok, checks=checks, notes=notes, orchestration=orchestration_summary())
 
 
 # ── Batches ─────────────────────────────────────────────────────────────────
