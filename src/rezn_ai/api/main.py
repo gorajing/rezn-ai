@@ -186,7 +186,9 @@ def doctor() -> DoctorResponse:
                      ("not connected — startup should have failed (REDIS_REQUIRED/REZN_PRODUCTION)."
                       if redis_required() else
                       "not connected — dev-only InMemoryStore. Set REDIS_URL + REDIS_REQUIRED=true for production.")),
-        "Set WANDB_API_KEY to upload traces to W&B Weave.",
+        "Weave tracing: " + (f"on — uploading traces to {WEAVE_STATUS.project}."
+                             if checks["weave_tracing"] else
+                             "off — set WANDB_API_KEY to upload traces to W&B Weave."),
         "Live inference: " + ("on — critic/composer agents call W&B Inference."
                               if inference_live else
                               "off — set REZN_ENABLE_INFERENCE=1 (required when REZN_PRODUCTION=true)."),

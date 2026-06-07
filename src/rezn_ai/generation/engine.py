@@ -72,11 +72,14 @@ class GeneratorEngine(Protocol):
         artifacts_root: Path,
         parent: Any,
         salt: int = 0,
+        *,
+        guidance: list[str] | None = None,
     ) -> CandidateResult:
         """Generate one reproducible mutation of an existing candidate.
 
         `parent` is anything carrying strategy/seed/key/mode/tempo (a Candidate
-        model or a CandidateResult).
+        model or a CandidateResult). ``guidance`` carries reflection/feedback
+        directives that shape the live LLM nudges (ignored by deterministic engines).
         """
 
 
@@ -123,7 +126,10 @@ class LocalGeneratorEngine:
         artifacts_root: Path,
         parent: Any,
         salt: int = 0,
+        *,
+        guidance: list[str] | None = None,
     ) -> CandidateResult:
+        # Deterministic engine has no LLM step, so guidance is intentionally unused.
         parent_params = CandidateParams(
             parent.strategy, parent.seed, parent.key, parent.mode, parent.tempo
         )

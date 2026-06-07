@@ -61,6 +61,9 @@ class Candidate(BaseModel):
     trace_url: str | None = None
     parent_candidate_id: str | None = None
     feedback: str | None = None
+    # The Weave call that generated this candidate's batch, so human curation can
+    # attach reactions/notes back onto the exact trace.
+    weave_call_id: str | None = None
     created_at: str = Field(default_factory=utc_now)
 
 

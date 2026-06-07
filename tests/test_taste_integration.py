@@ -50,6 +50,65 @@ def test_curation_records_taste_event(tmp_path):
     assert "taste.remembered" in events
 
 
+def test_approve_is_safe_without_weave(tmp_path):
+    # Weave tracing is off in tests; feedback must degrade silently, not crash.
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cand = cond.approve_candidate(batch.candidates[0].candidate_id)
+    assert cand.status == "approved"
+
+
+def test_add_call_feedback_noop_without_call_id():
+    from rezn_ai.tracing.weave_client import add_call_feedback, current_call_id
+
+    # Outside any @weave.op there is no active call, and feedback is a no-op.
+    assert current_call_id() is None
+    assert add_call_feedback(None, reaction="👍") is False
+    assert add_call_feedback("", note="hi") is False
+
+
+# ── Self-improvement: reflection + feedback-aware preference ──────────────────
+
+def test_reflect_on_feedback_deterministic_keep_and_change():
+    from rezn_ai.agents.llm_agents import reflect_on_feedback
+
+    signals = [
+        {"strategy": "groove_architect", "status": "approved", "technical_score": 0.6},
+        {"strategy": "texture_builder", "status": "rejected", "technical_score": 0.4},
+    ]
+    refl = reflect_on_feedback("dark techno", signals, notes=["want a busier groove"])
+    assert refl.source == "fallback"  # inference off in tests
+    assert any("groove_architect" in k for k in refl.keep)
+    assert "want a busier groove" in refl.change
+    guidance = refl.as_guidance()
+    assert any("Keep:" in g for g in guidance) and any("Change:" in g for g in guidance)
+
+
+def test_composite_score_rewards_approval_and_taste():
+    from rezn_ai.eval.preference import composite_score, taste_alignment
+
+    boosts = {"groove_architect": 4.0, "texture_builder": 1.0}
+    assert taste_alignment("groove_architect", boosts) == 1.0
+    assert taste_alignment("texture_builder", boosts) == 0.25
+    approved = composite_score(technical=0.5, critic=0.5, alignment=1.0, status="approved")
+    plain = composite_score(technical=0.5, critic=0.5, alignment=1.0, status="generated")
+    rejected = composite_score(technical=0.5, critic=0.5, alignment=1.0, status="rejected")
+    assert approved > plain > rejected
+
+
+def test_refine_emits_reflection_and_stamps_preference(tmp_path):
+    cond = _conductor(tmp_path)
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    # Every candidate carries the feedback-aware preference signal.
+    assert all("preference_score" in c.scores for c in batch.candidates)
+    cond.approve_candidate(batch.candidates[0].candidate_id)
+    cond.reject_candidate(batch.candidates[-1].candidate_id, note="too sparse")
+    child = cond.refine_batch(batch.batch_id)
+    events = [e.type for e in cond.store.get_batch(child.batch_id).events]
+    assert "reflection" in events
+    assert all("preference_score" in c.scores for c in child.candidates)
+
+
 # ── API surface (runs against InMemoryStore and fakeredis via the client fixture) ──
 
 def test_taste_profile_endpoint(client):

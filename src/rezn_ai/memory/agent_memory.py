@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _MODES = ("minor", "major")
 _BPM = re.compile(r"(\d{2,3})\s*bpm", re.IGNORECASE)
+_SAFE_ID = re.compile(r"[^A-Za-z0-9-]+")
 # Actions worth promoting straight to durable long-term memory.
 _DURABLE_ACTIONS = frozenset({"approved", "final"})
 
@@ -55,11 +56,6 @@ class AgentMemoryClient:
 
     def _path(self, suffix: str) -> str:
         return f"/v1/stores/{self.store_id}/{suffix}"
-
-    @staticmethod
-    def _safe_id(value: str) -> str:
-        """Service IDs allow [A-Za-z0-9-] only; our ids (batch_*, taste_*) use '_'."""
-        return value.replace("_", "-")
 
     # ── Health ───────────────────────────────────────────────────────────────
 
@@ -156,6 +152,12 @@ class AgentMemoryClient:
         return []
 
     @staticmethod
+    def _safe_id(value: str) -> str:
+        """Redis Agent Memory IDs allow only letters, numbers, and hyphens."""
+        cleaned = _SAFE_ID.sub("-", value).strip("-")
+        return cleaned or "rezn"
+
+    @staticmethod
     def _fact_from_memory(item: dict[str, Any]) -> TasteFact:
         text = str(item.get("text") or "")
         topics = [str(t).lower() for t in (item.get("topics") or [])]
@@ -181,10 +183,14 @@ class AgentMemoryClient:
         try:
             resp = self._client.post(path, json=payload)
             if resp.status_code >= 400:
-                logger.warning("Agent Memory write to %s returned %s: %s",
-                               path, resp.status_code, resp.text[:200])
+                raise httpx.HTTPStatusError(
+                    f"Agent Memory write to {path} returned {resp.status_code}: {resp.text}",
+                    request=resp.request,
+                    response=resp,
+                )
         except httpx.HTTPError as exc:
             logger.warning("Agent Memory write to %s failed: %s", path, exc)
+            raise
 
     def _post_json(self, path: str, payload: dict) -> Any:
         try:
