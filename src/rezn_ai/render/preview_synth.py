@@ -31,6 +31,9 @@ PART_MIX: dict[str, tuple[float, float]] = {
     "texture": (0.34, 0.22),
     "bass": (0.85, 0.0),
     "drums": (0.9, 0.0),
+    # Lead sits on top and just right of center so the melody reads clearly over the
+    # left-leaning harmony pad. Only present on real strategies (never the kernel).
+    "lead": (0.52, 0.08),
 }
 DEFAULT_MIX = (0.4, 0.0)
 

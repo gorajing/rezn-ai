@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-PARTS = ("bass", "harmony", "texture")
+PARTS = ("bass", "harmony", "texture", "lead")
 
 # Palette families: per-part pools of synth patches (see render.preview_synth).
 # Pools are ordered by "fit" — the front is the most genre-typical choice and is
@@ -24,31 +24,37 @@ _FAMILIES: dict[str, dict[str, tuple[str, ...]]] = {
         "bass": ("saw", "pluck", "square"),
         "harmony": ("square", "detuned_saw", "saw"),
         "texture": ("detuned_saw", "saw", "fm_bell"),
+        "lead": ("saw", "square", "pluck"),
     },
     "bass_music": {
         "bass": ("saw", "square"),
         "harmony": ("square", "saw"),
         "texture": ("saw", "fm_bell", "detuned_saw"),
+        "lead": ("square", "saw", "pluck"),
     },
     "chill_organic": {
         "bass": ("pluck", "sine"),
         "harmony": ("triangle", "fm_bell"),
         "texture": ("fm_bell", "triangle"),
+        "lead": ("triangle", "fm_bell", "pluck"),
     },
     "ambient_cinematic": {
         "bass": ("sine", "triangle"),
         "harmony": ("detuned_saw", "triangle", "fm_bell"),
         "texture": ("fm_bell", "detuned_saw", "triangle"),
+        "lead": ("triangle", "fm_bell", "detuned_saw"),
     },
     "retro_synth": {
         "bass": ("saw", "pluck"),
         "harmony": ("detuned_saw", "saw"),
         "texture": ("detuned_saw", "fm_bell"),
+        "lead": ("saw", "square", "pluck"),
     },
     "band_pop": {
         "bass": ("pluck", "saw"),
         "harmony": ("triangle", "square"),
         "texture": ("triangle", "fm_bell"),
+        "lead": ("square", "triangle", "pluck"),
     },
 }
 
@@ -78,6 +84,11 @@ _CHARACTER: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (("shimmer", "glassy", "bell", "metallic", "fm", "crystal", "digital", "ethereal", "chime"), "texture", "fm_bell"),
     (("pluck", "stab", "staccato", "plucky", "arp", "bouncy"), "harmony", "pluck"),
     (("deep", "sub", "fat", "heavy", "boomy"), "bass", "sine"),
+    # Lead/melody character: the prompt biases the hook's tone too.
+    (("soaring", "searing", "bright", "lead", "melodic", "anthemic", "hook", "screaming"), "lead", "saw"),
+    (("warm", "mellow", "soft", "smooth", "gentle", "velvet", "lo-fi", "lofi"), "lead", "triangle"),
+    (("pluck", "stab", "staccato", "plucky", "arp", "bouncy"), "lead", "pluck"),
+    (("shimmer", "glassy", "bell", "metallic", "crystal", "chime"), "lead", "fm_bell"),
 )
 
 
@@ -91,10 +102,10 @@ def _prepend(pool: list[str], patch: str) -> None:
 def _energy_pools(energy: float) -> dict[str, list[str]]:
     """Genre-agnostic fallback palette driven purely by energy."""
     if energy >= 0.66:
-        return {"bass": ["saw", "square"], "harmony": ["square", "saw", "detuned_saw"], "texture": ["saw", "detuned_saw", "fm_bell"]}
+        return {"bass": ["saw", "square"], "harmony": ["square", "saw", "detuned_saw"], "texture": ["saw", "detuned_saw", "fm_bell"], "lead": ["saw", "square", "pluck"]}
     if energy <= 0.34:
-        return {"bass": ["sine", "triangle"], "harmony": ["triangle", "detuned_saw"], "texture": ["fm_bell", "triangle", "detuned_saw"]}
-    return {"bass": ["pluck", "saw", "sine"], "harmony": ["square", "triangle", "detuned_saw"], "texture": ["detuned_saw", "fm_bell", "triangle"]}
+        return {"bass": ["sine", "triangle"], "harmony": ["triangle", "detuned_saw"], "texture": ["fm_bell", "triangle", "detuned_saw"], "lead": ["triangle", "fm_bell", "pluck"]}
+    return {"bass": ["pluck", "saw", "sine"], "harmony": ["square", "triangle", "detuned_saw"], "texture": ["detuned_saw", "fm_bell", "triangle"], "lead": ["square", "saw", "pluck"]}
 
 
 def _pick(pool: list[str], seed: int, strategy: str, part: str) -> str:
