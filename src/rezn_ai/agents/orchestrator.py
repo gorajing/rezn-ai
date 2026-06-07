@@ -63,6 +63,7 @@ def _apply_proposal(
         tempo=tempo,
         seed=base_seed + proposal.seed_jitter,
         parent_candidate_id=parent_candidate_id,
+        prompt=brief.text,
     )
 
 
@@ -88,6 +89,7 @@ def compose_candidate(plan: CandidatePlan) -> dict[str, Any]:
         tempo=plan.tempo,
         seed=plan.seed,
         strategy=plan.strategy,
+        prompt=plan.prompt,
     )
 
 

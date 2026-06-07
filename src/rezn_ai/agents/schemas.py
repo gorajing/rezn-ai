@@ -28,6 +28,7 @@ class CandidatePlan:
     tempo: float
     seed: int
     parent_candidate_id: str | None = None
+    prompt: str = ""  # brief text, so composition can pick timbre from it
 
 
 @dataclass(frozen=True)

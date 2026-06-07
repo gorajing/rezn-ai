@@ -17,6 +17,7 @@ from rezn_ai import __version__
 
 from .arrangement import DEFAULT_FORM, section_start_beats, total_beats
 from .theory import scale_note
+from .timbre import select_voices
 from ..provenance import utc_now
 
 
@@ -159,6 +160,29 @@ def style_for(strategy: str) -> Style:
     return STYLES.get(strategy, DEFAULT_STYLE)
 
 
+# --------------------------------------------------------------------------- #
+# Timbre: which synth patch renders each part (see render.preview_synth).
+# `default` keeps every part on the original sine stack so the kernel render is
+# byte-identical; each strategy gets a distinct palette so candidates differ in
+# *tone*, not just rhythm/notes.
+# --------------------------------------------------------------------------- #
+
+DEFAULT_VOICES: dict[str, str] = {"harmony": "sine", "bass": "sine", "texture": "sine"}
+
+STRATEGY_VOICES: dict[str, dict[str, str]] = {
+    "groove_architect": {"bass": "pluck", "harmony": "square", "texture": "sine"},
+    "harmony_driver": {"harmony": "detuned_saw", "bass": "saw", "texture": "triangle"},
+    "texture_builder": {"texture": "fm_bell", "harmony": "triangle", "bass": "sine"},
+    "energy_curve": {"bass": "saw", "harmony": "square", "texture": "saw"},
+    "wildcard_mutator": {"harmony": "fm_bell", "bass": "square", "texture": "detuned_saw"},
+}
+
+
+def voices_for(strategy: str) -> dict[str, str]:
+    """Part -> synth patch for a strategy (falls back to the sine kernel)."""
+    return {**DEFAULT_VOICES, **STRATEGY_VOICES.get(strategy, {})}
+
+
 DEGREE_MOVES: dict[int, tuple[int, ...]] = {
     0: (2, 3, 5, 6),
     1: (4, 6),
@@ -242,6 +266,7 @@ def compose_arrangement(
     seed: int,
     strategy: str = "default",
     energy: float = 0.5,
+    prompt: str = "",
 ) -> dict[str, Any]:
     style = style_for(strategy)
     # Global intensity from the interpreted brief: 0.5 is neutral (em == 1.0, so
@@ -277,6 +302,13 @@ def compose_arrangement(
     for note in notes:
         parts.setdefault(note.part, []).append(note.to_dict())
 
+    # Instrumentation follows the prompt (genre/mood/energy), varied per candidate
+    # by seed. The default kernel stays all-sine so the CLI/tests are byte-identical.
+    if prompt and style.name != "default":
+        voices = select_voices(prompt, seed=seed, energy=energy, strategy=style.name)
+    else:
+        voices = voices_for(style.name)
+
     return {
         "schema": "rezn-ai.arrangement.v1",
         "identity": {
@@ -293,6 +325,7 @@ def compose_arrangement(
             "total_beats": total_beats(DEFAULT_FORM),
             "sections": sections,
         },
+        "voices": voices,
         "parts": parts,
         "provenance": {
             "generator": "rezn_ai.music.composition.compose_arrangement",
