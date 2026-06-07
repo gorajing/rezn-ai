@@ -234,6 +234,14 @@ def test_agent_client_health_unreachable_on_401():
     assert _mock_client(lambda r: httpx.Response(401, json={})).health()["reachable"] is False
 
 
+def test_agent_client_health_tolerates_404_on_quirky_probe_path():
+    """Liveness, not correctness. The bare-GET probe path is undocumented, so a healthy
+    store can legitimately answer 4xx (e.g. 404/405); only auth rejection (401/403) and
+    5xx mean unreachable. With best-effort taste writes, tolerating a 4xx here avoids
+    blocking a healthy deploy — a worse failure than a soft, loud runtime write."""
+    assert _mock_client(lambda r: httpx.Response(404, json={})).health()["reachable"] is True
+
+
 def test_agent_client_remember_writes_session_event_and_long_term():
     seen: list[str] = []
 
@@ -276,6 +284,31 @@ def test_agent_client_rejected_action_writes_long_term():
     _mock_client(handler).remember_curation(
         producer_id="default", session_id="b1", action="rejected", candidate=_candidate())
     assert f"/v1/stores/{_STORE}/long-term-memory" in seen  # rejections are durable taste signals
+
+
+def test_agent_client_remember_returns_true_on_success():
+    assert _mock_client(lambda r: httpx.Response(200, json={})).remember_curation(
+        producer_id="default", session_id="b1", action="approved", candidate=_candidate()) is True
+
+
+def test_agent_client_remember_returns_false_and_never_raises_on_write_error():
+    """TasteMemory contract (2A): a failed write logs and returns False — it must
+    never raise into the request path, despite the method's prior name."""
+    client = _mock_client(lambda r: httpx.Response(500, json={"error": "boom"}))
+    assert client.remember_curation(
+        producer_id="default", session_id="b1", action="approved", candidate=_candidate()) is False
+
+
+def test_agent_client_remember_returns_false_on_partial_persistence():
+    """A durable action must report False if EITHER the session event OR the long-term
+    write fails — locking the AND across both posts (the success-path conjunction)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/long-term-memory"):
+            return httpx.Response(500, json={})
+        return httpx.Response(200, json={})  # session-memory/events succeeds
+
+    assert _mock_client(handler).remember_curation(
+        producer_id="default", session_id="b1", action="approved", candidate=_candidate()) is False
 
 
 def test_agent_client_recall_maps_memories_to_bias():

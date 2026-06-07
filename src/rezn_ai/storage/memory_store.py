@@ -15,7 +15,10 @@ from ..models import MAX_LESSONS, Batch, BatchEvent, Candidate, MemoryLesson
 
 
 class InMemoryStore:
-    def __init__(self) -> None:
+    def __init__(self, *, event_maxlen: int = 1000) -> None:
+        # Mirrors RedisStore's _DEFAULT_EVENT_STREAM_MAXLEN so the per-batch event log
+        # reads identically across backends past the cap (store parity).
+        self._event_maxlen = event_maxlen
         self._batches: dict[str, Batch] = {}
         self._candidates: dict[str, Candidate] = {}
         self._rankings: dict[str, dict[str, float]] = {}   # batch_id -> {candidate_id: score}
@@ -34,6 +37,11 @@ class InMemoryStore:
     def save_batch(self, batch: Batch) -> Batch:
         stored = batch.model_copy(deep=True)
         stored.candidates = []  # projection, never stored
+        # Events are written only via append_event (mirrors RedisStore, where they
+        # live in the stream, not the batch JSON): preserve the accumulated log and
+        # ignore any events carried on the passed batch.
+        prior = self._batches.get(batch.batch_id)
+        stored.events = prior.events if prior is not None else []
         self._batches[batch.batch_id] = stored
         return batch
 
@@ -48,6 +56,8 @@ class InMemoryStore:
     def append_event(self, batch_id: str, event: BatchEvent) -> Batch:
         batch = self._batches[batch_id]
         batch.events.append(event.model_copy(deep=True))
+        if self._event_maxlen and len(batch.events) > self._event_maxlen:
+            del batch.events[: -self._event_maxlen]  # keep only the most recent N
         return self.get_batch(batch_id)
 
     # ── Candidates ─────────────────────────────────────────────────────────────

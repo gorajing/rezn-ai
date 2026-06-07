@@ -32,7 +32,14 @@ from .learning.policy_update import (
     mutate_prompt_policy,
 )
 from .memory.local import LocalTasteMemory
-from .memory.taste import PlanningBias, TasteFact, TasteMemory, TasteRecall, derive_bias
+from .memory.taste import (
+    CONFIDENCE_FULL,
+    PlanningBias,
+    TasteFact,
+    TasteMemory,
+    TasteRecall,
+    derive_bias,
+)
 from .music.prompt_policy import select_prompt_policy
 from .music.sound_profile import FEATURE_SPECS
 from .tracing.weave_client import (
@@ -55,9 +62,6 @@ from .models import (
 
 # The single agent that every conductor turn registers under in the Weave Agents view.
 _AGENT_NAME = "rezn-conductor"
-# Once-per-parent prompt-arm mutation marker: bounded lifetime so these idempotency
-# markers self-expire (any real re-refinement happens far inside this window).
-_ARMMUT_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +107,14 @@ class BatchConductor:
                 "REZN_PRODUCTION is set — configure the Redis Cloud Agent Memory service."
             )
         self.producer_id = os.getenv("AGENT_MEMORY_PRODUCER_ID", "default")
+        # Capture the backend label once (it is constant per backend) so the taste
+        # success path never makes a live health() network call — keeping the happy
+        # path a single round-trip and the never-raise guarantee structural rather
+        # than dependent on each backend's health() implementation.
+        try:
+            self._taste_backend = self.taste.health().get("backend")
+        except Exception:
+            self._taste_backend = None
 
     def _record_feedback(self, candidate: Candidate, *, reaction: str | None, note: str | None) -> None:
         """Attach the human's judgment to the candidate's generation trace (best-effort)."""
@@ -165,6 +177,9 @@ class BatchConductor:
             vector = {}
         profile_weights = {k: float(v) for k, v in vector.items() if k != "__count__"}
         policy_version = int(vector.get("__count__", 0))
+        # Evidence ramp: the taste nudge reaches full strength only once it is backed
+        # by CONFIDENCE_FULL curation decisions; fewer apply it proportionally gentler.
+        confidence = round(min(1.0, policy_version / CONFIDENCE_FULL), 4)
         prompt_policies = {
             strategy: select_prompt_policy(self.store, self.producer_id, strategy).to_dict()
             for strategy in COMPOSER_STRATEGIES
@@ -174,6 +189,7 @@ class BatchConductor:
             profile_weights=profile_weights,
             prompt_policies=prompt_policies,
             policy_version=policy_version,
+            confidence=confidence,
         )
 
     def _policy_version(self) -> int:
@@ -288,22 +304,39 @@ class BatchConductor:
         return deltas
 
     def _record_taste(self, candidate: Candidate, action: str, note: str = "") -> None:
-        """Append a curation decision to the producer's taste profile (best-effort)."""
+        """Record a curation decision into the producer's taste profile.
+
+        Best-effort by contract — a ``TasteMemory`` backend must never raise into the
+        request path. The candidate is already persisted (canonical state), so a
+        taste-memory hiccup must never fail the user's action: a write that does not
+        persist surfaces as a loud ``taste.write_failed`` event (visible in the batch
+        timeline / Weave / UI), never as a 500. Whether a *misconfigured* backend
+        blocks the deploy is decided once, at startup, by ``build_taste_memory``.
+        """
         try:
-            self.taste.remember_curation(
+            persisted = self.taste.remember_curation(
                 producer_id=self.producer_id,
                 session_id=candidate.batch_id,
                 action=action,
                 candidate=candidate,
                 note=note,
             )
+        except Exception as exc:  # defense in depth — the contract says never raise
+            logger.warning("Taste memory write raised for %s: %s", candidate.candidate_id, exc)
+            persisted = False
+
+        if persisted:
             self._event(candidate.batch_id, "taste.remembered",
                         f"Recorded {action} of {candidate.strategy} into taste memory.",
                         {"candidate_id": candidate.candidate_id, "action": action,
-                         "backend": self.taste.health().get("backend")})
-        except Exception as exc:
-            if agent_memory_required():
-                raise RuntimeError(f"Taste memory write failed: {exc}") from exc
+                         "backend": self._taste_backend})
+        else:
+            logger.warning("Taste memory write for %s did not persist (action=%s)",
+                           candidate.candidate_id, action)
+            self._event(candidate.batch_id, "taste.write_failed",
+                        f"Taste memory write for {action} of {candidate.strategy} did not "
+                        "persist; the candidate is saved and taste will catch up.",
+                        {"candidate_id": candidate.candidate_id, "action": action})
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -760,7 +793,7 @@ class BatchConductor:
         # refine_batch retries of the same parent cannot both evolve the arms.
         armmut_key = f"rezn:refine:armmut:{self.producer_id}:{parent_batch_id}"
         try:
-            claimed = self.store.claim_once(armmut_key, ttl_seconds=_ARMMUT_TTL_SECONDS)
+            claimed = self.store.claim_once(armmut_key)
         except Exception:
             if agent_memory_required():
                 raise  # production: a broken policy store fails fast, not silently

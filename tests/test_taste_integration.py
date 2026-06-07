@@ -6,6 +6,7 @@ import pytest
 
 from rezn_ai.conductor import BatchConductor
 from rezn_ai.generation.rezn_engine import ReznGeneratorEngine
+from rezn_ai.memory.taste import PlanningBias
 from rezn_ai.models import BatchCreateRequest, CreativeBrief, MemoryLesson
 from rezn_ai.storage.memory_store import InMemoryStore
 
@@ -134,6 +135,7 @@ class _SpyTaste:
 
     def remember_curation(self, *, producer_id, session_id, action, candidate, note=""):
         self.curations.append((action, candidate.candidate_id))
+        return True
 
     def health(self):
         return {"backend": "spy", "reachable": True}
@@ -153,6 +155,144 @@ def test_approve_then_final_records_one_curation_per_candidate(tmp_path):
     cond.select_final(batch.batch_id, cid)
     for_cand = [c for c in spy.curations if c[1] == cid]
     assert len(for_cand) == 1
+
+
+class _FailingTaste:
+    """A TasteMemory whose writes never persist (and never raise) — models a
+    transient Agent Memory outage that honors the best-effort contract."""
+
+    def recall_taste(self, *, producer_id, brief, limit=5):
+        from rezn_ai.memory.taste import TasteRecall, derive_bias
+
+        return TasteRecall(facts=[], bias=derive_bias([], brief=brief))
+
+    def remember_curation(self, *, producer_id, session_id, action, candidate, note=""):
+        return False  # the write did not persist
+
+    def health(self):
+        return {"backend": "failing", "reachable": True}
+
+
+class _RaisingTaste(_FailingTaste):
+    """A misbehaving backend that violates the contract and RAISES; the conductor
+    must still absorb it (defense in depth) and never fail the user's request."""
+
+    def remember_curation(self, *, producer_id, session_id, action, candidate, note=""):
+        raise RuntimeError("agent memory down")
+
+
+def test_approve_emits_write_failed_when_taste_does_not_persist(tmp_path):
+    """A non-persisted taste write surfaces as a loud taste.write_failed event, never
+    as taste.remembered — and the approval itself still succeeds."""
+    engine = ReznGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
+    store = InMemoryStore()
+    cond = BatchConductor(store=store, engine=engine, artifacts_root=tmp_path, taste=_FailingTaste())
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cand = batch.candidates[0]
+    approved = cond.approve_candidate(cand.candidate_id)
+    assert approved.status == "approved"
+    events = [e.type for e in store.get_batch(batch.batch_id).events]
+    assert "taste.write_failed" in events
+    assert "taste.remembered" not in events
+
+
+def test_approve_does_not_raise_when_taste_fails_even_if_required(tmp_path, monkeypatch):
+    """The production bug 2A fixes: with AGENT_MEMORY_REQUIRED on, a taste-write blip
+    used to 500 an already-persisted approve. It must now return the candidate and
+    emit taste.write_failed instead of raising."""
+    engine = ReznGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
+    store = InMemoryStore()
+    cond = BatchConductor(store=store, engine=engine, artifacts_root=tmp_path, taste=_RaisingTaste())
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cand = batch.candidates[0]
+    # Flip "required" on AFTER construction (the constructor forbids a Local backend
+    # under required; our fake is not Local). In the approve path only _record_taste
+    # consults it — _update_policy writes to the healthy store and won't trip.
+    monkeypatch.setattr("rezn_ai.conductor.agent_memory_required", lambda: True)
+    approved = cond.approve_candidate(cand.candidate_id)  # must NOT raise
+    assert approved.candidate_id == cand.candidate_id
+    assert approved.status == "approved"
+    events = [e.type for e in store.get_batch(batch.batch_id).events]
+    assert "taste.write_failed" in events
+
+
+def test_reject_does_not_raise_when_taste_fails_even_if_required(tmp_path, monkeypatch):
+    """The never-500 guarantee holds for reject too (it runs _update_policy after
+    _record_taste, like approve) — not just the approve verb."""
+    engine = ReznGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
+    store = InMemoryStore()
+    cond = BatchConductor(store=store, engine=engine, artifacts_root=tmp_path, taste=_RaisingTaste())
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
+    cand = batch.candidates[0]
+    monkeypatch.setattr("rezn_ai.conductor.agent_memory_required", lambda: True)
+    rejected = cond.reject_candidate(cand.candidate_id, note="too muddy")  # must NOT raise
+    assert rejected.status == "rejected"
+    events = [e.type for e in store.get_batch(batch.batch_id).events]
+    assert "taste.write_failed" in events
+
+
+class _HealthRaisesTaste:
+    """Writes succeed, but health() raises. The success-path event label must not be
+    fetched via a live health() call that could 500 an already-persisted approve."""
+
+    def recall_taste(self, *, producer_id, brief, limit=5):
+        from rezn_ai.memory.taste import TasteRecall, derive_bias
+
+        return TasteRecall(facts=[], bias=derive_bias([], brief=brief))
+
+    def remember_curation(self, *, producer_id, session_id, action, candidate, note=""):
+        return True
+
+    def health(self):
+        raise RuntimeError("health endpoint down")
+
+
+def test_approve_does_not_raise_when_backend_health_raises(tmp_path):
+    """The success-path backend label must not depend on a live health() call: a backend
+    whose health() raises must still let an approve succeed and record taste."""
+    engine = ReznGeneratorEngine(preview_seconds=0.3, sample_rate=8000)
+    store = InMemoryStore()
+    cond = BatchConductor(store=store, engine=engine, artifacts_root=tmp_path, taste=_HealthRaisesTaste())
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(1)))
+    cand = batch.candidates[0]
+    approved = cond.approve_candidate(cand.candidate_id)  # must NOT raise
+    assert approved.status == "approved"
+    events = [e.type for e in store.get_batch(batch.batch_id).events]
+    assert "taste.remembered" in events
+
+
+# ── Confidence ramp (2B): taste strength scales with evidence ─────────────────
+
+def test_attach_policy_ramps_confidence_with_evidence(tmp_path):
+    """The taste vector's __count__ becomes a confidence in [0, 1]: 1-2 decisions
+    nudge gently, full strength only once well-evidenced (CONFIDENCE_FULL=8). A
+    single noisy decision can't slam taste to full (anti-overfitting)."""
+    cond = _conductor(tmp_path)
+    cond.store.save_taste_vector(cond.producer_id, {"kick.drive": 0.2}, count=4)
+    assert cond._attach_policy(PlanningBias()).confidence == 0.5   # 4/8
+    cond.store.save_taste_vector(cond.producer_id, {"kick.drive": 0.2}, count=8)
+    assert cond._attach_policy(PlanningBias()).confidence == 1.0   # capped at full
+    cond.store.save_taste_vector(cond.producer_id, {"kick.drive": 0.2}, count=20)
+    assert cond._attach_policy(PlanningBias()).confidence == 1.0   # never exceeds 1
+    cond.store.save_taste_vector(cond.producer_id, {}, count=0)
+    assert cond._attach_policy(PlanningBias()).confidence == 0.0   # unproven -> none
+
+
+def test_confidence_ramp_scales_first_batch_taste(tmp_path):
+    """A fresh batch leans toward taste in proportion to evidence: low count yields
+    a gentler drum nudge than high count, in the same direction."""
+    def kick_drive(sub: str, count: int, weights: dict) -> float:
+        cond = _conductor(tmp_path / sub)
+        if count:
+            cond.store.save_taste_vector(cond.producer_id, weights, count=count)
+        batch = cond.start_batch(BatchCreateRequest(brief=_brief(1)))
+        return batch.candidates[0].profile_features["kick.drive"]
+
+    base = kick_drive("base", 0, {})                   # no taste
+    low = kick_drive("low", 2, {"kick.drive": 0.1})    # strength 0.25
+    full = kick_drive("full", 8, {"kick.drive": 0.1})  # strength 1.0
+    assert (low - base) != 0.0                  # taste IS applied at low evidence...
+    assert 0 < (low - base) < (full - base)     # ...but more gently than at full
 
 
 def test_select_final_is_fully_idempotent(tmp_path):

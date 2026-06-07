@@ -24,6 +24,10 @@ if TYPE_CHECKING:  # avoid import cycles / heavy imports at runtime
 
 # How far taste is allowed to pull the tempo from the brief, in BPM.
 MAX_TEMPO_DELTA = 6.0
+# Decisions of evidence before recalled taste reaches full strength. Below this the
+# applied strength ramps linearly (count / CONFIDENCE_FULL), so a single noisy
+# decision can't slam taste to full — see PlanningBias.confidence + apply_taste.
+CONFIDENCE_FULL = 8
 # A mode is only forced when it clearly dominates the recalled taste weight.
 MODE_PREF_THRESHOLD = 0.6
 _VALID_MODES = ("minor", "major")
@@ -66,6 +70,11 @@ class PlanningBias:
     # The Redis policy version that produced this batch (curation events that have
     # shaped the taste vector). 0 -> an unbiased, never-curated producer.
     policy_version: int = 0
+    # Confidence in the learned taste, in [0, 1], scaled by how many curation
+    # decisions back the vector (count / CONFIDENCE_FULL, capped). Applied as the
+    # strength of the drum-feature nudge, so a thinly-evidenced taste leans gently
+    # and only reaches full strength once well-evidenced. 1.0 -> full strength.
+    confidence: float = 1.0
 
     @property
     def is_empty(self) -> bool:
@@ -101,8 +110,12 @@ class TasteMemory(Protocol):
         action: str,
         candidate: "Candidate",
         note: str = "",
-    ) -> None:
-        """Record one curation decision into the producer's taste profile."""
+    ) -> bool:
+        """Record one curation decision into the producer's taste profile.
+
+        Best-effort: returns True if the decision persisted, False otherwise, and
+        must NEVER raise into the request path.
+        """
 
     def recall_taste(
         self, *, producer_id: str, brief: CreativeBrief, limit: int = 5

@@ -8,10 +8,12 @@ Covers the three data structures:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from rezn_ai.models import Batch, BatchEvent, Candidate, CreativeBrief, MemoryLesson
-from rezn_ai.storage.redis_store import batch_events_key, lessons_key
+from rezn_ai.storage.redis_store import batch_events_key, batch_key, lessons_key
 
 
 def _brief() -> CreativeBrief:
@@ -88,6 +90,32 @@ def test_append_event_writes_stream_and_batch(redis_store, fake_redis_client):
     stream = fake_redis_client.xrange(batch_events_key("batch_e"))
     assert len(stream) == 1
     assert stream[0][1]["type"] == "batch.started"
+
+
+def test_get_batch_sources_events_from_stream(redis_store, fake_redis_client):
+    """The per-batch Redis Stream is the single source of truth for events:
+    get_batch surfaces whatever is in the stream, not a copy in the batch JSON.
+    """
+    redis_store.save_batch(_batch("batch_src"))
+    fake_redis_client.xadd(batch_events_key("batch_src"), {
+        "id": "evt_1", "type": "batch.ranked", "message": "ranked",
+        "ts": "2026-01-01T00:00:00Z", "payload": "{}",
+    })
+    batch = redis_store.get_batch("batch_src")
+    assert [e.id for e in batch.events] == ["evt_1"]
+    assert batch.events[0].type == "batch.ranked"
+
+
+def test_events_not_duplicated_into_batch_json(redis_store, fake_redis_client):
+    """append_event writes only to the stream; the persisted batch JSON never
+    carries an events list, so the batch record can't grow unbounded with events.
+    """
+    redis_store.save_batch(_batch("batch_json"))
+    redis_store.append_event("batch_json", BatchEvent(type="batch.started", message="go"))
+    stored = json.loads(fake_redis_client.get(batch_key("batch_json")))
+    assert stored.get("events", []) == []
+    # ...but get_batch still surfaces the event, sourced from the stream.
+    assert len(redis_store.get_batch("batch_json").events) == 1
 
 
 # ── Refinement memory (Sorted Set) ───────────────────────────────────────────

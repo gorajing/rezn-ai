@@ -40,11 +40,12 @@ class LocalTasteMemory:
         action: str,
         candidate: Candidate,
         note: str = "",
-    ) -> None:
+    ) -> bool:
         # No-op by design: the conductor already persists a MemoryLesson via
         # ``_remember`` into the same sorted set this backend recalls from.
-        # Keeping this a no-op avoids double-writing the lesson library.
-        return None
+        # Keeping this a no-op avoids double-writing the lesson library. Reports
+        # success — the decision is durably captured as a lesson elsewhere.
+        return True
 
     def recall_taste(
         self, *, producer_id: str, brief: CreativeBrief, limit: int = 5

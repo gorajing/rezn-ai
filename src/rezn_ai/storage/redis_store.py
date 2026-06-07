@@ -30,6 +30,22 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 
+# ── Lifecycle policy ────────────────────────────────────────────────────────────
+# Ephemeral run-state (batches, candidates, event stream, feedback, once-per-parent
+# markers) carries a sliding TTL so the free tier can't fill up. The learned policy
+# (taste vector, prompt arms, profiles, decisions, lessons) is the memory and never
+# expires. Streams are also hard-capped so one batch's log can't grow unbounded.
+_DEFAULT_STATE_TTL_SECONDS = 604800  # 7 days; 0 disables expiry (original behavior)
+_DEFAULT_EVENT_STREAM_MAXLEN = 1000  # per-batch event log
+_DEFAULT_DECISIONS_STREAM_MAXLEN = 10000  # durable decisions audit log
+
+
+def _state_ttl_from_env() -> int:
+    try:
+        return int(os.getenv("REZN_STATE_TTL_SECONDS", str(_DEFAULT_STATE_TTL_SECONDS)))
+    except ValueError:
+        return _DEFAULT_STATE_TTL_SECONDS
+
 
 def _is_truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -59,6 +75,25 @@ def redis_url_from_env() -> str:
     scheme = "rediss" if _is_truthy(os.getenv("REDIS_TLS")) else "redis"
     auth = f"{username}:{password}@" if password else ""
     return f"{scheme}://{auth}{host}:{port}"
+
+
+def _ssl_kwargs_from_env(redis_url: str) -> dict[str, Any]:
+    """Cert config for a ``rediss://`` (TLS) connection, read from env. Empty for a
+    plain ``redis://`` URL. Lets Redis Cloud with a private CA be verified
+    (``REDIS_SSL_CA_CERTS``) or verification relaxed (``REDIS_SSL_CERT_REQS`` =
+    ``required`` | ``optional`` | ``none``) without code changes. redis-py already
+    enables TLS for ``rediss://`` and defaults ssl_cert_reqs to ``required``.
+    """
+    if not redis_url.startswith("rediss://"):
+        return {}
+    kwargs: dict[str, Any] = {}
+    ca_certs = os.getenv("REDIS_SSL_CA_CERTS")
+    if ca_certs:
+        kwargs["ssl_ca_certs"] = ca_certs
+    cert_reqs = os.getenv("REDIS_SSL_CERT_REQS")
+    if cert_reqs:
+        kwargs["ssl_cert_reqs"] = cert_reqs
+    return kwargs
 
 
 def redact_url(url: str) -> str:
@@ -210,7 +245,15 @@ class RedisStore:
     ``_client`` (used by the tests with fakeredis).
     """
 
-    def __init__(self, redis_url: str = DEFAULT_REDIS_URL, _client: Any = None) -> None:
+    def __init__(
+        self,
+        redis_url: str = DEFAULT_REDIS_URL,
+        _client: Any = None,
+        *,
+        state_ttl_seconds: int | None = None,
+        event_stream_maxlen: int | None = None,
+        decisions_stream_maxlen: int | None = None,
+    ) -> None:
         if _client is not None:
             self._r = _client
         else:
@@ -222,13 +265,35 @@ class RedisStore:
                 socket_keepalive=True,
                 retry_on_timeout=True,
                 health_check_interval=30,
+                **_ssl_kwargs_from_env(redis_url),
             )
+        self._state_ttl = (
+            _state_ttl_from_env() if state_ttl_seconds is None else int(state_ttl_seconds)
+        )
+        self._event_stream_maxlen = (
+            _DEFAULT_EVENT_STREAM_MAXLEN if event_stream_maxlen is None else int(event_stream_maxlen)
+        )
+        self._decisions_stream_maxlen = (
+            _DEFAULT_DECISIONS_STREAM_MAXLEN
+            if decisions_stream_maxlen is None
+            else int(decisions_stream_maxlen)
+        )
+
+    def _expire(self, *keys: str) -> None:
+        """Apply the sliding run-state TTL to ephemeral keys. No-op when the TTL is
+        disabled (``REZN_STATE_TTL_SECONDS=0``), preserving never-expire behavior."""
+        if self._state_ttl <= 0:
+            return
+        for key in keys:
+            self._r.expire(key, self._state_ttl)
 
     # ── Batches (JSON per batch) ─────────────────────────────────────────────
 
     def save_batch(self, batch: Batch) -> Batch:
-        # `candidates` is a read-time projection; never persist it on the batch record.
-        self._r.set(batch_key(batch.batch_id), batch.model_dump_json(exclude={"candidates"}))
+        # `candidates` is a read-time projection and `events` live in the per-batch
+        # stream (the source of truth); never persist either on the batch record.
+        self._r.set(batch_key(batch.batch_id), batch.model_dump_json(exclude={"candidates", "events"}))
+        self._expire(batch_key(batch.batch_id))
         return batch
 
     def _load_batch(self, batch_id: str) -> Batch:
@@ -239,6 +304,7 @@ class RedisStore:
 
     def get_batch(self, batch_id: str) -> Batch:
         batch = self._load_batch(batch_id)
+        batch.events = self._read_events(batch_id)
         batch.candidates = self.get_ranked_candidates(batch_id)
         batch.candidate_ids = [c.candidate_id for c in batch.candidates]
         return batch
@@ -246,17 +312,31 @@ class RedisStore:
     # ── Events (Redis Stream per batch) ──────────────────────────────────────
 
     def append_event(self, batch_id: str, event: BatchEvent) -> Batch:
-        self._r.xadd(batch_events_key(batch_id), {
+        key = batch_events_key(batch_id)
+        self._r.xadd(key, {
             "id": event.id,
             "type": event.type,
             "message": event.message,
             "ts": event.ts,
             "payload": json.dumps(event.payload),
-        })
-        batch = self._load_batch(batch_id)
-        batch.events.append(event)
-        self.save_batch(batch)
-        return batch
+        }, maxlen=self._event_stream_maxlen, approximate=False)
+        # Slide the batch record's TTL too: the whole run-state must expire together,
+        # or the root record could lapse while its still-active children keep sliding.
+        self._expire(key, batch_key(batch_id))
+        return self.get_batch(batch_id)
+
+    def _read_events(self, batch_id: str) -> list[BatchEvent]:
+        """Reconstruct the batch event log from its Redis Stream (source of truth)."""
+        events: list[BatchEvent] = []
+        for _entry_id, fields in self._r.xrange(batch_events_key(batch_id)):
+            events.append(BatchEvent(
+                id=fields["id"],
+                type=fields["type"],
+                message=fields["message"],
+                ts=fields["ts"],
+                payload=json.loads(fields.get("payload") or "{}"),
+            ))
+        return events
 
     # ── Candidates (Hash per candidate, Sorted Set for ranking) ──────────────
 
@@ -264,6 +344,12 @@ class RedisStore:
         self._r.hset(candidate_key(candidate.candidate_id), mapping=_candidate_to_mapping(candidate))
         # Sorted set = ranking by technical_score (best first via ZREVRANGE).
         self._r.zadd(batch_candidates_key(candidate.batch_id), {candidate.candidate_id: candidate.technical_score})
+        # Sliding the parent batch record too keeps the whole run-state coherent.
+        self._expire(
+            candidate_key(candidate.candidate_id),
+            batch_candidates_key(candidate.batch_id),
+            batch_key(candidate.batch_id),
+        )
         return candidate
 
     def get_candidate(self, candidate_id: str) -> Candidate:
@@ -284,6 +370,7 @@ class RedisStore:
 
     def save_feedback(self, candidate_id: str, payload: dict[str, Any]) -> None:
         self._r.set(feedback_key(candidate_id), json.dumps(payload))
+        self._expire(feedback_key(candidate_id))
 
     # ── Refinement memory (Sorted Set by improvement_delta) ──────────────────
 
@@ -393,11 +480,16 @@ class RedisStore:
         """Atomically claim ``key`` exactly once. Returns True for the first caller,
         False thereafter — SET NX is atomic, so concurrent callers cannot both claim.
 
-        ``ttl_seconds`` (SET NX EX) bounds the marker's lifetime so ephemeral
-        idempotency markers self-expire instead of accreting forever; ``None`` keeps
-        the marker until explicitly cleared.
+        By default, the marker carries the run-state TTL so once-per-parent markers
+        cannot accumulate forever. ``ttl_seconds`` is accepted for older callers and
+        tests that need an explicit window; ``None`` uses the store's state TTL, and
+        ``REZN_STATE_TTL_SECONDS=0`` preserves never-expire behavior. This is a
+        permanent idempotency marker, not a held lock.
         """
-        return bool(self._r.set(key, "1", nx=True, ex=ttl_seconds))
+        ex = ttl_seconds if ttl_seconds is not None else (
+            self._state_ttl if self._state_ttl > 0 else None
+        )
+        return bool(self._r.set(key, "1", nx=True, ex=ex))
 
     def purge_demo_state(self, *, execute: bool = False) -> dict[str, int]:
         """SCAN and (when ``execute``) UNLINK ephemeral demo run-state, always
@@ -416,8 +508,14 @@ class RedisStore:
         return {"ephemeral": len(key_list), "deleted": deleted}
 
     def append_decision(self, producer_id: str, decision: dict[str, Any]) -> None:
-        """Append a policy-update / curation decision to the producer's stream."""
-        self._r.xadd(taste_decisions_key(producer_id), {"data": json.dumps(decision)})
+        """Append a policy-update / curation decision to the producer's stream.
+
+        Durable (never expires) but hard-capped so the audit log stays bounded.
+        """
+        self._r.xadd(
+            taste_decisions_key(producer_id), {"data": json.dumps(decision)},
+            maxlen=self._decisions_stream_maxlen, approximate=False,
+        )
 
     def read_decisions(self, producer_id: str, count: int = 50) -> list[dict[str, Any]]:
         """The most recent ``count`` decisions (oldest-first within the window)."""

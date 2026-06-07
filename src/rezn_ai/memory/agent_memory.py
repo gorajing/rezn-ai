@@ -67,6 +67,13 @@ class AgentMemoryClient:
         except httpx.HTTPError as exc:
             logger.warning("Agent Memory unreachable: %s", exc)
             return {"backend": "agent_memory", "reachable": False, "url": self.base_url}
+        # Liveness, not correctness: reachable iff the host answered and the Bearer key
+        # was accepted. We deliberately do NOT treat 4xx (e.g. 404/405 from this
+        # undocumented bare-GET probe path) as unreachable — a healthy store can answer
+        # non-2xx here, and with best-effort taste writes a too-lenient startup check is
+        # low-cost, whereas blocking a healthy deploy is not. Only auth rejection
+        # (401/403) and 5xx / transport failure (the except above) count as unreachable.
+        # TODO: probe the redis-agent-memory SDK health() route for a precise check.
         reachable = resp.status_code < 500 and resp.status_code not in (401, 403)
         return {
             "backend": "agent_memory",
@@ -86,12 +93,14 @@ class AgentMemoryClient:
         action: str,
         candidate: Candidate,
         note: str = "",
-    ) -> None:
+    ) -> bool:
+        """Best-effort write of one curation decision. Returns True if it persisted,
+        False otherwise; never raises (the TasteMemory contract)."""
         sentence = self._sentence(action, candidate, note)
         sid = self._safe_id(session_id)
         owner = self._safe_id(producer_id)
         # 1) Short-term session event (the service auto-promotes to long-term).
-        self._post_silently(self._path("session-memory/events"), {
+        ok = self._post_best_effort(self._path("session-memory/events"), {
             "sessionId": sid,
             "actorId": owner,
             "role": "USER",
@@ -103,7 +112,7 @@ class AgentMemoryClient:
         #    on the server-side promotion timing.
         if action in _DURABLE_ACTIONS:
             topics = [t for t in (candidate.strategy, candidate.mode) if t]
-            self._post_silently(self._path("long-term-memory"), {
+            durable_ok = self._post_best_effort(self._path("long-term-memory"), {
                 "memories": [{
                     "id": self._safe_id(new_id("taste")),
                     "text": sentence,
@@ -114,6 +123,8 @@ class AgentMemoryClient:
                     "ownerId": owner,
                 }]
             })
+            ok = ok and durable_ok
+        return ok
 
     # ── Read ─────────────────────────────────────────────────────────────────
 
@@ -212,18 +223,20 @@ class AgentMemoryClient:
             mode=mode, tempo=tempo, source="agent_memory",
         )
 
-    def _post_silently(self, path: str, payload: dict) -> None:
+    def _post_best_effort(self, path: str, payload: dict) -> bool:
+        """Write that must never raise into the request path (TasteMemory contract).
+        Returns True on success; logs and returns False when the write did not persist.
+        """
         try:
             resp = self._client.post(path, json=payload)
-            if resp.status_code >= 400:
-                raise httpx.HTTPStatusError(
-                    f"Agent Memory write to {path} returned {resp.status_code}: {resp.text}",
-                    request=resp.request,
-                    response=resp,
-                )
         except httpx.HTTPError as exc:
             logger.warning("Agent Memory write to %s failed: %s", path, exc)
-            raise
+            return False
+        if resp.status_code >= 400:
+            logger.warning("Agent Memory write to %s returned %s: %s",
+                           path, resp.status_code, resp.text)
+            return False
+        return True
 
     def _post_json(self, path: str, payload: dict) -> Any:
         try:

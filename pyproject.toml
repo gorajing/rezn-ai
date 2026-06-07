@@ -37,3 +37,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "integration: requires a real Redis (set REZN_TEST_REDIS_URL); skipped otherwise",
+]

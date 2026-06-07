@@ -8,7 +8,7 @@ from __future__ import annotations
 import fakeredis
 import pytest
 
-from rezn_ai.models import Candidate
+from rezn_ai.models import Batch, BatchEvent, Candidate, CreativeBrief
 from rezn_ai.storage.memory_store import InMemoryStore
 from rezn_ai.storage.redis_store import RedisStore
 
@@ -91,6 +91,37 @@ def test_decisions_stream_append_and_read(store):
     decisions = store.read_decisions("p1", count=10)
     assert len(decisions) == 2
     assert {d["reason"] for d in decisions} == {"punchier", "sparser"}
+
+
+def test_append_event_log_is_identical_across_stores_under_cap():
+    """SACRED parity: the event log must read identically on both backends even past
+    the cap — RedisStore's XADD MAXLEN trim and InMemoryStore's list trim must agree.
+    """
+    brief = CreativeBrief(prompt="p", key="F#", mode="minor", tempo=128.0, candidate_count=2)
+    backends = [
+        InMemoryStore(event_maxlen=5),
+        RedisStore(
+            _client=fakeredis.FakeRedis(decode_responses=True),
+            event_stream_maxlen=5, state_ttl_seconds=0,
+        ),
+    ]
+    histories = []
+    for s in backends:
+        s.save_batch(Batch(batch_id="b", brief=brief))
+        for i in range(12):
+            s.append_event("b", BatchEvent(type="tick", message=str(i)))
+        histories.append([e.message for e in s.get_batch("b").events])
+    assert histories[0] == histories[1] == ["7", "8", "9", "10", "11"]
+
+
+def test_save_batch_never_persists_events_on_either_store():
+    """append_event is the sole event writer on both backends: events carried on a
+    batch passed to save_batch must be ignored (RedisStore re-sources from the stream;
+    InMemoryStore must mirror that, not persist them onto the record)."""
+    brief = CreativeBrief(prompt="p", key="F#", mode="minor", tempo=128.0, candidate_count=2)
+    for s in (InMemoryStore(), RedisStore(_client=fakeredis.FakeRedis(decode_responses=True))):
+        s.save_batch(Batch(batch_id="bx", brief=brief, events=[BatchEvent(type="x", message="manual")]))
+        assert s.get_batch("bx").events == []
 
 
 def test_candidate_provenance_roundtrips_on_both_stores(store):

@@ -26,11 +26,12 @@ def _lesson(i: int) -> MemoryLesson:
 
 # ── claim_once TTL (ephemeral idempotency markers) ───────────────────────────
 
-def test_claim_once_without_ttl_never_expires():
+def test_claim_once_without_explicit_ttl_uses_state_ttl():
     store = _redis()
     assert store.claim_once("rezn:refine:armmut:p:b1") is True
     assert store.claim_once("rezn:refine:armmut:p:b1") is False  # still claimed
-    assert store._r.ttl("rezn:refine:armmut:p:b1") == -1  # persistent, no expiry
+    ttl = store._r.ttl("rezn:refine:armmut:p:b1")
+    assert 0 < ttl <= 604800
 
 
 def test_claim_once_with_ttl_sets_expiry_but_stays_claimed():
