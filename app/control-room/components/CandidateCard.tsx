@@ -6,6 +6,12 @@ import { Waveform } from "./Waveform";
 import { ScoreRing } from "./ScoreRing";
 import { ScoreBreakdown } from "./ScoreBreakdown";
 import { CheckIcon, PauseIcon, PlayIcon, StarIcon, TraceIcon, WandIcon, XIcon } from "./icons";
+import { STRATEGIES } from "../mock-data";
+
+// Strategy signature ("what makes this take distinct"), surfaced under the label.
+const STRATEGY_BLURB: Record<string, string> = Object.fromEntries(
+  STRATEGIES.map((s) => [s.key, s.blurb]),
+);
 
 const STATUS_PILL: Record<CandidateStatus, { label: string; cls: string }> = {
   generated: { label: "New", cls: "border-line-2 bg-surface-2 text-muted" },
@@ -98,6 +104,9 @@ export function CandidateCard({
               </span>
             </div>
             <p className="mt-0.5 font-mono text-[11px] text-subtle">{candidate.id}</p>
+            {STRATEGY_BLURB[candidate.strategy] && (
+              <p className="mt-0.5 text-[11px] text-muted">{STRATEGY_BLURB[candidate.strategy]}</p>
+            )}
           </div>
         </div>
 
