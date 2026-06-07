@@ -20,17 +20,15 @@ export function ActivityFeed({ events }: { events: ActivityEvent[] }) {
   const ordered = [...events].reverse();
   return (
     <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-line bg-surface">
-      <div className="flex items-center justify-between border-b border-line px-4 py-3">
-        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-          Live Activity
-        </h3>
-        <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-subtle">
+      <div className="flex items-center justify-between border-b border-line px-5 py-4">
+        <h3 className="eyebrow text-[10px] text-muted">Live Activity</h3>
+        <span className="eyebrow flex items-center gap-1.5 text-[9px] text-subtle">
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
           streaming
         </span>
       </div>
 
-      <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
+      <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
         {ordered.map((e) => (
           <li key={e.id} className="rezn-rise flex gap-3">
             <div className="flex flex-col items-center">
