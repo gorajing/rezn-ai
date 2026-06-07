@@ -99,7 +99,10 @@ def main() -> int:
     report["session_delta_top"] = round(final - initial, 4)
     report["taste_backend"] = taste.health()
     report["weave"] = {
-        "enabled": weave_status.enabled,
+        # WeaveStatus exposes available/initialized; "enabled" == tracing is live.
+        "enabled": weave_status.available and weave_status.initialized,
+        "available": weave_status.available,
+        "initialized": weave_status.initialized,
         "project": weave_status.project,
         "reason": weave_status.reason,
     }
