@@ -8,6 +8,7 @@ replaced is gone — see docs/adr/0002-generator-over-mix-conductor.md.
 from __future__ import annotations
 
 import os
+from dataclasses import replace as _dataclass_replace
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,8 @@ from .eval.preference import composite_score, taste_alignment
 from .eval.refinement_eval import compute_iteration_metrics, record_refinement_iteration
 from .generation.engine import CandidateResult, GeneratorEngine
 from .memory.local import LocalTasteMemory
-from .memory.taste import TasteFact, TasteMemory, TasteRecall, derive_bias
+from .memory.taste import PlanningBias, TasteFact, TasteMemory, TasteRecall, derive_bias
+from .music.prompt_policy import select_prompt_policy
 from .tracing.weave_client import (
     add_call_feedback,
     weave_call_url,
@@ -104,6 +106,26 @@ class BatchConductor:
         merged = session_facts + [f for f in recall.facts if f.text not in seen]
         bias = derive_bias(merged, brief=brief)
         return TasteRecall(facts=merged, bias=bias)
+
+    def _attach_policy(self, bias: PlanningBias) -> PlanningBias:
+        """Attach the live Redis-driven policy to the planning bias: the persistent
+        taste vector (drum features) and the current prompt arm per composer strategy
+        (the prompt-arms bandit). An empty policy store yields base arms + no vector,
+        so the first batch for a new producer is unbiased. Never raises into the
+        request path.
+        """
+        try:
+            vector = self.store.get_taste_vector(self.producer_id)
+        except Exception:
+            vector = {}
+        profile_weights = {k: float(v) for k, v in vector.items() if k != "__count__"}
+        prompt_policies = {
+            strategy: select_prompt_policy(self.store, self.producer_id, strategy).to_dict()
+            for strategy in COMPOSER_STRATEGIES
+        }
+        return _dataclass_replace(
+            bias, profile_weights=profile_weights, prompt_policies=prompt_policies
+        )
 
     def _record_taste(self, candidate: Candidate, action: str, note: str = "") -> None:
         """Append a curation decision to the producer's taste profile (best-effort)."""
@@ -217,7 +239,9 @@ class BatchConductor:
         )
 
         recall = self.taste.recall_taste(producer_id=self.producer_id, brief=brief)
-        bias = recall.bias
+        # Attach the live Redis-driven policy (taste vector + prompt arms) so this
+        # batch generates from what the producer has taught the loop.
+        bias = self._attach_policy(recall.bias)
         if recall.facts:
             self._event(
                 batch_id, "taste.recalled",

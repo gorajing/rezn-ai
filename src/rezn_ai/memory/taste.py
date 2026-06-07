@@ -57,10 +57,20 @@ class PlanningBias:
     # they left). Threaded into the composer agents' prompts so new songs reflect
     # what the producer has been asking for. Does not affect deterministic planning.
     suggestions: list[str] = field(default_factory=list)
+    # The persistent feature taste vector (rezn:taste:{producer}:profile_weights),
+    # applied to each candidate's DrumKit at generation. Empty -> no bias.
+    profile_weights: dict[str, float] = field(default_factory=dict)
+    # The current prompt arm per strategy (strategy -> PromptPolicy.to_dict()), used
+    # to build each candidate's INTERNAL prompt. Empty -> strategy defaults.
+    prompt_policies: dict[str, dict] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
-        """True when the bias would not change planning at all (a strict no-op)."""
+        """True when the bias would not change planning at all (a strict no-op).
+
+        ``profile_weights``/``prompt_policies`` are applied separately at generation,
+        so they do not affect this strategy/tempo/mode planning no-op check.
+        """
         return (
             not self.strategy_boosts
             and self.tempo_delta == 0.0

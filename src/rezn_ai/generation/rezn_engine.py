@@ -22,7 +22,8 @@ from ..eval.mix_checks import evaluate_metrics
 from ..eval.scoring import technical_score
 from ..models import CreativeBrief, new_id
 from ..music.composition import compose_arrangement
-from ..music.sound_profile import DrumKit, kit_features
+from ..music.prompt_policy import build_internal_prompt, default_prompt_policy
+from ..music.sound_profile import DrumKit, PromptPolicy, kit_features
 from ..music.midi import export_midi_parts
 from ..provenance import write_json
 from ..render.preview_synth import full_band_start_seconds, write_preview_wav
@@ -56,7 +57,14 @@ class ReznGeneratorEngine:
             bias=bias,
         )
         guidance = list(bias.suggestions) if bias is not None else None
-        results = [self._render(batch_id, artifacts_root, params, brief, guidance) for params in plan]
+        policies = bias.prompt_policies if bias is not None else {}
+        results = [
+            self._render(
+                batch_id, artifacts_root, params, brief, guidance,
+                prompt_policy=policies.get(params.strategy),
+            )
+            for params in plan
+        ]
         results.sort(key=lambda r: r.technical_score, reverse=True)
         return results
 
@@ -86,6 +94,8 @@ class ReznGeneratorEngine:
                 parent_features = {str(k): float(v) for k, v in raw.items()}
 
         parent_profile_id = getattr(parent, "profile_id", None) or None
+        # Continue the parent's prompt arm so a variant stays on the same prompt line.
+        parent_policy = getattr(parent, "prompt_policy", None) or None
         nudges = nudges_from_guidance(guidance, parent_features=parent_features)
         # When the reflector emitted change directives, micro-search a few seeds and
         # keep the highest-scoring variant — bounded hill-climb within the session.
@@ -107,6 +117,7 @@ class ReznGeneratorEngine:
                     parent_features=parent_features,
                     nudges=nudges,
                     parent_profile_id=parent_profile_id,
+                    prompt_policy=parent_policy,
                 )
                 if best is None or result.technical_score > best.technical_score:
                     best = result
@@ -122,6 +133,7 @@ class ReznGeneratorEngine:
             parent_features=parent_features,
             nudges=nudges,
             parent_profile_id=parent_profile_id,
+            prompt_policy=parent_policy,
         )
 
     @weave_op("compose_candidate")
@@ -136,6 +148,7 @@ class ReznGeneratorEngine:
         parent_features: dict[str, float] | None = None,
         nudges: Any | None = None,
         parent_profile_id: str | None = None,
+        prompt_policy: dict[str, Any] | None = None,
     ) -> CandidateResult:
         candidate_id = new_id("cand")
         candidate_dir = Path(artifacts_root) / "batches" / batch_id / candidate_id
@@ -160,6 +173,12 @@ class ReznGeneratorEngine:
         mode = proposal.mode or params.mode
         energy = max(0.0, min(1.0, float(getattr(brief, "energy", 0.5)) + det_nudges.energy_delta))
 
+        # The candidate's INTERNAL prompt: the UI brief is only a starter; each
+        # strategy augments it from its PromptPolicy (descriptors minus avoided
+        # traits). The default strategy returns the brief unchanged (byte-identity).
+        policy = PromptPolicy.from_dict(prompt_policy) if prompt_policy else default_prompt_policy(params.strategy)
+        internal_prompt = build_internal_prompt(brief.prompt, strategy=params.strategy, policy=policy)
+
         arrangement = compose_arrangement(
             title=f"{batch_id}:{params.strategy}",
             key=params.key,
@@ -168,7 +187,7 @@ class ReznGeneratorEngine:
             seed=seed,
             strategy=params.strategy,
             energy=energy,
-            prompt=brief.prompt,
+            prompt=internal_prompt,
         )
         arrangement_path = candidate_dir / "arrangement.json"
         write_json(arrangement_path, arrangement)
@@ -203,10 +222,8 @@ class ReznGeneratorEngine:
             "voices": voices,
             "drum_kit": kit.to_dict(),
             "features": profile_features,
-            # internal_prompt / prompt_policy are populated by the prompt-policy
-            # bandit in a later workstream; empty here keeps the snapshot honest.
-            "internal_prompt": "",
-            "prompt_policy": None,
+            "internal_prompt": internal_prompt,
+            "prompt_policy": policy.to_dict(),
         }
 
         # Preview the full-band section (not the quiet intro) so the strategy's
@@ -271,6 +288,8 @@ class ReznGeneratorEngine:
             weave_call_id=current_call_id(),
             profile_id=profile_id,
             sound_profile=sound_profile_snapshot,
+            internal_prompt=internal_prompt,
+            prompt_policy=policy.to_dict(),
             drum_kit=kit.to_dict(),
             voices=voices,
             profile_features=profile_features,

@@ -43,6 +43,22 @@ def test_taste_recall_biases_fresh_batch(tmp_path):
     assert "taste.recalled" in [e.type for e in batch.events]
 
 
+def test_start_batch_uses_learned_prompt_arm(tmp_path):
+    """The conductor reads the prompt-arms bandit: a learned arm stored for a
+    strategy is used to build that strategy's internal prompt (Workstream D)."""
+    from rezn_ai.music.sound_profile import PromptPolicy
+
+    cond = _conductor(tmp_path)
+    learned = PromptPolicy(arm="groove_architect:A1",
+                           descriptors=("gritty", "warehouse pressure"), avoid=(), version=1)
+    cond.store.save_profile(cond.producer_id, "arm:groove_architect", learned.to_dict())
+    batch = cond.start_batch(BatchCreateRequest(brief=_brief(3)))
+    groove = [c for c in batch.candidates if c.strategy == "groove_architect"]
+    assert groove
+    assert groove[0].prompt_policy["arm"] == "groove_architect:A1"
+    assert "gritty" in groove[0].internal_prompt
+
+
 def test_curation_records_taste_event(tmp_path):
     cond = _conductor(tmp_path)
     batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))

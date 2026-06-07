@@ -55,6 +55,19 @@ def test_generated_candidate_carries_profile_provenance(tmp_path):
     assert top.sound_profile.get("features", {}).get("kick.drive") == top.profile_features["kick.drive"]
 
 
+def test_generated_candidate_carries_internal_prompt(tmp_path):
+    """Each candidate's INTERNAL prompt is generated from its strategy/PromptPolicy
+    and is distinct from the UI starter brief (Workstream D)."""
+    conductor = _conductor(tmp_path)
+    brief = CreativeBrief(prompt="dark techno", key="D#", mode="minor", tempo=128.0, candidate_count=3)
+    batch = conductor.start_batch(BatchCreateRequest(brief=brief))
+    for c in batch.candidates:
+        assert c.internal_prompt, f"{c.strategy} has no internal prompt"
+        assert c.prompt_policy.get("arm")  # the arm used to generate it
+        assert c.internal_prompt != brief.prompt  # augmented past the starter
+        assert c.internal_prompt.startswith(brief.prompt)
+
+
 def test_rezn_engine_variant_has_lineage(tmp_path):
     conductor = _conductor(tmp_path)
     brief = CreativeBrief(prompt="x", key="A", mode="minor", tempo=120.0, candidate_count=2)
