@@ -642,7 +642,9 @@ class BatchConductor:
         try:
             claimed = self.store.claim_once(armmut_key)
         except Exception:
-            claimed = True  # best-effort: if the claim store is down, still evolve once
+            if agent_memory_required():
+                raise  # production: a broken policy store fails fast, not silently
+            claimed = True  # dev fallback: still evolve once
         prompt_deltas: dict[str, str] = self._mutate_prompt_arms(parent) if claimed else {}
         decided_count = len(approved) + len(rejected)
         confidence = round(min(1.0, decided_count / max(1, len(parent_candidates))), 4)
