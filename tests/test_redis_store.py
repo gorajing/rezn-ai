@@ -117,3 +117,19 @@ def test_doctor_status_all_true_when_connected(redis_store):
 
 def test_lessons_key_is_namespaced():
     assert lessons_key() == "rezn:lessons:global"
+
+
+def test_candidate_roundtrip_preserves_weave_call_id(redis_store):
+    """Per-candidate Weave deep-links must survive the Redis hash round-trip.
+
+    Regression: weave_call_id was set in the conductor but omitted from the
+    persisted candidate hash, so trace deep-links silently broke under Redis
+    while working under InMemoryStore.
+    """
+    cand = _candidate("batch_w", "cand_w", 0.7)
+    cand.weave_call_id = "01HABCDEF-call-123"
+    cand.trace_url = "https://wandb.ai/rezn-ai/rezn-ai/r/call/01HABCDEF-call-123"
+    redis_store.save_candidate(cand)
+    fetched = redis_store.get_candidate("cand_w")
+    assert fetched.weave_call_id == "01HABCDEF-call-123"
+    assert fetched.trace_url == "https://wandb.ai/rezn-ai/rezn-ai/r/call/01HABCDEF-call-123"

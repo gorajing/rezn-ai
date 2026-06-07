@@ -111,7 +111,7 @@ def encode_json(payload: Any) -> str:
 
 # ── Candidate <-> Redis hash serialization ─────────────────────────────────────
 
-_OPTIONAL_STR_FIELDS = ("audio_url", "arrangement_url", "trace_url", "parent_candidate_id", "feedback")
+_OPTIONAL_STR_FIELDS = ("audio_url", "arrangement_url", "trace_url", "parent_candidate_id", "feedback", "weave_call_id")
 _JSON_FIELDS = ("scores", "midi_urls", "reasons")
 
 
