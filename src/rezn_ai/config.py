@@ -42,6 +42,21 @@ def inference_required() -> bool:
     return production_mode() or is_truthy(os.getenv("REZN_INFERENCE_REQUIRED"))
 
 
+def deep_mode_requested() -> bool:
+    """The operator asked for the multi-agent LLM ensemble (lens critics + judge)."""
+    return is_truthy(os.getenv("REZN_DEEP_MODE"))
+
+
+def deep_mode_enabled() -> bool:
+    """True only when deep mode is requested AND live inference is actually available.
+    Requested-but-unavailable is handled (fail loud) at the call site, not here."""
+    if not deep_mode_requested():
+        return False
+    from .agents.llm_agents import inference_enabled
+
+    return inference_enabled()
+
+
 def validate_deployment() -> None:
     """Fail fast at API startup when production posture is violated."""
     if is_truthy(os.getenv("REZN_DISABLE_REDIS")):

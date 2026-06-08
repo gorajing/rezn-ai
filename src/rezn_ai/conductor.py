@@ -15,9 +15,23 @@ from pathlib import Path
 from typing import Any
 
 from .agents.harness import _allocate, reweight_from_candidates
-from .agents.llm_agents import interpret_brief, reflect_on_feedback
-from .agents.roster import COMPOSER_STRATEGIES
-from .config import agent_memory_required
+from .agents.llm_agents import (
+    CriticInput,
+    inference_enabled,
+    interpret_brief,
+    judge_panel,
+    lens_critique,
+    reflect_on_feedback,
+)
+from .agents.roster import (
+    COMPOSER_STRATEGIES,
+    AGENT_ORCHESTRATOR,
+    AGENT_JUDGE,
+    CRITIC_LENSES,
+    composer_agent_id,
+    critic_agent_id,
+)
+from .config import agent_memory_required, deep_mode_enabled, deep_mode_requested
 from .eval.preference import composite_score, taste_alignment
 from .eval.refinement_eval import (
     compute_iteration_metrics,
@@ -380,6 +394,73 @@ class BatchConductor:
     def _event(self, batch_id: str, event_type: str, message: str, payload: dict | None = None) -> None:
         self.store.append_event(batch_id, BatchEvent(type=event_type, message=message, payload=payload or {}))
 
+    def _agent_event(
+        self, batch_id: str, agent_id: str, role: str, message: str,
+        payload: dict | None = None, *, phase: str = "batch",
+    ) -> None:
+        """Emit an ``agent.step`` event tagging which ensemble agent acted. The UI
+        Agent Room and demos group on ``payload.agent_id``; ``role`` drives the lane.
+        ``phase`` (``batch``/``refine``/…) is part of the §4.3 event contract and lives
+        here so every emitter — including a future refine-path one — must name its phase."""
+        self._event(
+            batch_id, "agent.step", message,
+            {"agent_id": agent_id, "role": role, "phase": phase, **(payload or {})},
+        )
+
+    def _agent_scope(self, batch_id: str, agent_id: str) -> Any:
+        """Per-agent Weave session+turn so each ensemble member is a distinct agent in
+        the Weave Agents view. No-op when Weave is off; never raises (see _agent_turn)."""
+        return self._agent_turn(
+            conversation_id=self._conversation_id(batch_id),
+            user_message=f"{agent_id} reviewing batch {batch_id}",
+            session_name=agent_id,
+            agent_name=agent_id,
+        )
+
+    def _emit_panel_events(self, batch_id: str, candidates: list[Candidate]) -> None:
+        """The critic panel + judge. Deep mode → the LLM lens critics + judge reason over
+        the batch; otherwise deterministic stand-ins (feature-mean lenses, technical-score
+        judge). Each runs inside its own Weave agent scope and emits an agent.step carrying
+        rationale + ranking + source. The judge SURFACES a ranking but does not re-sort
+        stored candidates (D6′ — the store has one ordering used by refinement too)."""
+        if not candidates:
+            return
+        inputs = [
+            CriticInput(
+                c.candidate_id, c.strategy, c.technical_score,
+                (c.scores or {}).get("features", {}) or {},
+            )
+            for c in candidates
+        ]
+        by_id = {c.candidate_id: c for c in candidates}
+        if deep_mode_requested() and not inference_enabled():
+            self._agent_event(
+                batch_id, AGENT_ORCHESTRATOR, "orchestrator",
+                "Deep mode requested but inference is unavailable — running the deterministic panel.",
+                {"warning": "deep_mode_unavailable"},
+            )
+        verdicts = []
+        for lens in CRITIC_LENSES:
+            with self._agent_scope(batch_id, critic_agent_id(lens)):
+                verdict = lens_critique(lens, inputs)
+                verdicts.append(verdict)
+                fav = by_id.get(verdict.favorite)
+                self._agent_event(
+                    batch_id, critic_agent_id(lens), "critic",
+                    f"{lens.title()} critic favors {fav.strategy if fav else '—'}: {verdict.rationale}",
+                    {"lens": lens, "favorite": verdict.favorite,
+                     "ranking": list(verdict.ranking), "source": verdict.source},
+                )
+        with self._agent_scope(batch_id, AGENT_JUDGE):
+            decision = judge_panel(inputs, verdicts)
+            win = by_id.get(decision.winner)
+            self._agent_event(
+                batch_id, AGENT_JUDGE, "judge",
+                f"Judge ranked {len(candidates)} — {win.strategy if win else '—'} wins: {decision.rationale}",
+                {"winner": decision.winner, "ranking": list(decision.ranking),
+                 "confidence": decision.confidence, "source": decision.source},
+            )
+
     def _stamp_preference(
         self, candidate: Candidate, strategy_boosts: dict[str, float] | None
     ) -> None:
@@ -421,7 +502,9 @@ class BatchConductor:
             current = parent
         return current  # cycle — stop at the repeated id
 
-    def _agent_turn(self, *, conversation_id: str, user_message: str, session_name: str = "") -> Any:
+    def _agent_turn(
+        self, *, conversation_id: str, user_message: str, session_name: str = "", agent_name: str = _AGENT_NAME
+    ) -> Any:
         """Enter the Weave Agents session+turn for one conductor action and return a
         context manager spanning it. Pure observability: a no-op when Weave is off, and
         it never raises into the request path — a tracing failure must not fail curation.
@@ -430,12 +513,12 @@ class BatchConductor:
         try:
             stack.enter_context(
                 weave_session(
-                    agent_name=_AGENT_NAME,
+                    agent_name=agent_name,
                     session_id=conversation_id,
                     session_name=session_name or conversation_id,
                 )
             )
-            stack.enter_context(weave_turn(user_message=user_message, agent_name=_AGENT_NAME))
+            stack.enter_context(weave_turn(user_message=user_message, agent_name=agent_name))
         except Exception:
             stack.close()
             return nullcontext()
@@ -507,6 +590,14 @@ class BatchConductor:
                 },
             )
 
+        with self._agent_scope(batch_id, AGENT_ORCHESTRATOR):
+            self._agent_event(
+                batch_id, AGENT_ORCHESTRATOR, "orchestrator",
+                f"Fanning out the brief to {brief.candidate_count} composer agents.",
+                {"candidate_count": brief.candidate_count,
+                 "strategies": list(COMPOSER_STRATEGIES)},
+            )
+
         results = self.engine.orchestrate_batch(brief, batch_id, self.artifacts_root, bias=bias)
         for result in results:
             candidate = self._to_candidate(result, batch_id)
@@ -516,7 +607,9 @@ class BatchConductor:
                 batch_id, "candidate.generated",
                 f"{candidate.strategy} → score {candidate.technical_score}",
                 {"candidate_id": candidate.candidate_id, "strategy": candidate.strategy,
-                 "technical_score": candidate.technical_score},
+                 "technical_score": candidate.technical_score,
+                 "agent_id": composer_agent_id(candidate.strategy), "role": "composer",
+                 "phase": "batch"},
             )
 
         batch = self.store.get_batch(batch_id)
@@ -528,6 +621,7 @@ class BatchConductor:
             f"Ranked {len(batch.candidates)} candidates (top score {top}).",
             {"count": len(batch.candidates), "top_score": top},
         )
+        self._emit_panel_events(batch_id, batch.candidates)
         return self.store.get_batch(batch_id)
 
     # ── Human-in-the-loop curation ───────────────────────────────────────────

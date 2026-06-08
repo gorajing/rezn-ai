@@ -21,6 +21,42 @@ COMPOSER_STRATEGIES: tuple[str, ...] = (
     "wildcard_mutator",
 )
 
+# Ensemble agent identities (Phase 1 visible-coordination layer). Each batch
+# surfaces these as distinct agents in the Weave Agents view and the Agent Room.
+AGENT_ORCHESTRATOR = "orchestrator"
+AGENT_JUDGE = "judge"
+AGENT_REFLECTOR = "reflector"
+CRITIC_LENSES: tuple[str, ...] = ("groove", "harmony", "mix")
+
+
+def composer_agent_id(strategy: str) -> str:
+    return f"composer:{strategy}"
+
+
+def critic_agent_id(lens: str) -> str:
+    return f"critic:{lens}"
+
+
+def ensemble_agents() -> list[dict[str, str]]:
+    """The full panel: orchestrator, one composer per strategy persona, one critic
+    per lens, a judge, and the reflector. Stable IDs the UI and Weave share."""
+    agents: list[dict[str, str]] = [
+        {"agent_id": AGENT_ORCHESTRATOR, "role": "orchestrator", "label": "Orchestrator"}
+    ]
+    agents += [
+        {"agent_id": composer_agent_id(s), "role": "composer", "label": s.replace("_", " ").title()}
+        for s in COMPOSER_STRATEGIES
+    ]
+    agents += [
+        {"agent_id": critic_agent_id(lens), "role": "critic", "label": f"{lens.title()} Critic"}
+        for lens in CRITIC_LENSES
+    ]
+    agents += [
+        {"agent_id": AGENT_JUDGE, "role": "judge", "label": "Judge"},
+        {"agent_id": AGENT_REFLECTOR, "role": "reflector", "label": "Reflector"},
+    ]
+    return agents
+
 
 @dataclass(frozen=True)
 class AgentRole:
@@ -64,4 +100,5 @@ def orchestration_summary() -> dict:
         "batch_pipeline": [a.__dict__ for a in BATCH_PIPELINE],
         "refine_pipeline": [a.__dict__ for a in REFINE_PIPELINE],
         "curation_actors": [a.__dict__ for a in CURATION_ACTORS],
+        "ensemble_agents": ensemble_agents(),
     }

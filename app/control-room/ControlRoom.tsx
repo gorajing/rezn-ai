@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ActivityEvent,
   AgentAction,
+  AgentLane,
   BatchStatus,
   Candidate,
   ChatMessage,
@@ -18,11 +19,12 @@ import type {
   ServiceStatus,
 } from "./types";
 import { DEFAULT_BRIEF, INITIAL_EVENTS, INITIAL_MESSAGES, uid, type ExamplePrompt } from "./ui-defaults";
-import { api, API_BASE, rankCandidates, type ApiBatch, type ApiEvent } from "../lib/api";
+import { api, API_BASE, agentLanesFromEvents, rankCandidates, type ApiBatch, type ApiEvent } from "../lib/api";
 import { TopBar } from "./components/TopBar";
 import { ChatPanel } from "./components/ChatPanel";
 import { CandidateBoard, type ActiveBrief } from "./components/CandidateBoard";
 import { SystemStatus } from "./components/SystemStatus";
+import { AgentRoom } from "./components/AgentRoom";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { CopilotBridge, type CopilotActionsApi } from "./CopilotBridge";
 
@@ -62,6 +64,7 @@ export function ControlRoom() {
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [services, setServices] = useState<ServiceStatus[]>(DEFAULT_SERVICES);
   const [agentActions, setAgentActions] = useState<AgentAction[]>([]);
+  const [agents, setAgents] = useState<AgentLane[]>([]);
   const seenEvents = useRef<Set<string>>(new Set());
 
   const pushEvent = useCallback((level: EventLevel, message: string) => {
@@ -110,6 +113,7 @@ export function ControlRoom() {
     (batch: ApiBatch) => {
       setBatchId(batch.batch_id);
       setCandidates(rankCandidates(batch.candidates));
+      setAgents(agentLanesFromEvents(batch.events));
       mergeServerEvents(batch.events);
     },
     [mergeServerEvents],
@@ -152,6 +156,7 @@ export function ControlRoom() {
       setActiveBrief({ genre: controls?.genre, key: c.key, mode: c.mode, tempo: c.tempo });
       setBatchStatus("generating");
       setCandidates([]);
+      setAgents([]);
       setPlayingId(null);
       if (source === "ui") say("user", text);
       pushEvent("agent", `Spawning ${DEFAULT_BRIEF.candidateCount} composer agents…`);
@@ -337,6 +342,7 @@ export function ControlRoom() {
   const handleNewBatch = useCallback(() => {
     setBatchStatus("idle");
     setCandidates([]);
+    setAgents([]);
     setPrompt(null);
     setBatchId(null);
     setPlayingId(null);
@@ -437,6 +443,7 @@ export function ControlRoom() {
 
         <aside className="hidden w-[280px] shrink-0 flex-col gap-5 border-l border-line bg-surface p-5 lg:flex">
           <SystemStatus services={services} />
+          <AgentRoom agents={agents} />
           <ActivityFeed events={events} />
         </aside>
       </div>

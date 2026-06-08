@@ -1,10 +1,13 @@
 """Conductor → Weave Agents instrumentation.
 
-One Weave *Conversation* per batch lineage (root batch_id as session id), one
-*Turn* per conductor action, all under a single agent ("rezn-conductor"). The
-session/turn helpers are no-ops when Weave is off, so these tests patch them with
-a recorder to assert the conductor opens them with the right ids — behaviour that
-is invisible at the (hermetic) SDK layer.
+One Weave *Conversation* per batch lineage (root batch_id as session id). The
+conductor opens a *Turn* for its own action under the "rezn-conductor" agent, and
+each ensemble member (orchestrator, the critic lenses, the judge) opens its own
+*Turn* under a distinct agent *within that same conversation* — so one batch
+surfaces a coordinating ensemble, not a single agent. The session/turn helpers are
+no-ops when Weave is off, so these tests patch them with a recorder to assert the
+conductor opens them with the right ids — behaviour that is invisible at the
+(hermetic) SDK layer.
 """
 
 from __future__ import annotations
@@ -13,6 +16,12 @@ from contextlib import nullcontext
 
 import pytest
 
+from rezn_ai.agents.roster import (
+    AGENT_JUDGE,
+    AGENT_ORCHESTRATOR,
+    CRITIC_LENSES,
+    critic_agent_id,
+)
 from rezn_ai.conductor import BatchConductor
 from rezn_ai.generation.engine import CandidateResult
 from rezn_ai.generation.rezn_engine import ReznGeneratorEngine
@@ -120,13 +129,25 @@ def test_traced_candidate_has_call_trace_url(tmp_path):
 
 # ── Each conductor action opens a session + turn ─────────────────────────────
 
-def test_start_batch_opens_session_and_turn(tmp_path, rec):
+def test_start_batch_opens_conductor_and_ensemble_sessions(tmp_path, rec):
     cond = _conductor(tmp_path)
     batch = cond.start_batch(BatchCreateRequest(brief=_brief(2)))
-    assert [s["session_id"] for s in rec.sessions] == [batch.batch_id]
+    # Every session/turn — the conductor's own plus each ensemble agent's — groups
+    # under ONE conversation: the batch lineage root.
+    assert {s["session_id"] for s in rec.sessions} == {batch.batch_id}
+    # The conductor wraps the whole action, so it opens first.
     assert rec.sessions[0]["agent_name"] == "rezn-conductor"
-    assert len(rec.turns) == 1
     assert rec.turns[0]["agent_name"] == "rezn-conductor"
+    # Each ensemble member registers as its OWN Weave agent within that conversation:
+    # conductor + orchestrator + one critic per lens + judge. (Composers trace via the
+    # engine's compose_candidate op, not the conductor, so they're not opened here.)
+    expected_agents = {"rezn-conductor", AGENT_ORCHESTRATOR, AGENT_JUDGE} | {
+        critic_agent_id(lens) for lens in CRITIC_LENSES
+    }
+    assert {s["agent_name"] for s in rec.sessions} == expected_agents
+    # Each agent opens exactly one session and one paired turn (no duplicates).
+    assert len(rec.sessions) == len(expected_agents)
+    assert [t["agent_name"] for t in rec.turns] == [s["agent_name"] for s in rec.sessions]
 
 
 def test_refine_turn_joins_parent_lineage_conversation(tmp_path, rec):
