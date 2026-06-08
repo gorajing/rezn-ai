@@ -2,10 +2,11 @@
 .DS_Store
 *.pem
 
-# Local editor/tooling rules (rocketride plugin)
+# Local editor / AI-tool configs (not project source)
 .rocketride/
 .claude/
 .cursor/
+.codex/
 
 # ── Secrets ─────────────────────────────────────────────────────────────────
 .env
@@ -46,3 +47,7 @@ artifacts/batches/
 
 # Playwright MCP browser-automation logs (not source)
 .playwright-mcp/
+
+# ── Accidental nested clones of this repo (root-anchored; never commit) ──────
+/rezn-ai/
+/rezn-ai-1/
