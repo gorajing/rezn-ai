@@ -15,6 +15,10 @@ RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Unbuffered stdout/stderr so logs flush immediately (critical for diagnosing
+# startup in container platforms that kill unhealthy containers before a flush).
+ENV PYTHONUNBUFFERED=1
+
 # Canonical output locations the API serves from (/artifacts mount).
 RUN mkdir -p runs artifacts
 
@@ -22,6 +26,7 @@ EXPOSE 8000
 
 # Honors REZN_PRODUCTION, REDIS_URL, AGENT_MEMORY_*, WANDB_API_KEY,
 # REZN_ENABLE_INFERENCE, REZN_INFERENCE_REQUIRED, REZN_CORS_ORIGINS from env.
-# Shell form so $PORT (set by Railway and most PaaS hosts) is honored; falls back
-# to 8000 for local `docker run`.
-CMD uvicorn rezn_ai.api.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Exec-form `sh -c` so $PORT (set by Railway and most PaaS hosts) is always expanded
+# by a shell — even when a platform exec's the command without one — falling back to
+# 8000 for local `docker run`. `exec` hands PID 1 (and its signals) to uvicorn.
+CMD ["sh", "-c", "exec uvicorn rezn_ai.api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

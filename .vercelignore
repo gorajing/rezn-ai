@@ -1,0 +1,44 @@
+# Vercel builds ONLY the Next.js frontend. Exclude the Python backend, build caches,
+# generated artifacts, secrets, and local tooling so the upload stays small (the
+# backend lives on Railway). Without this, Vercel sweeps in .venv/.next/runs/artifacts.
+
+# Python backend
+.venv/
+src/
+tests/
+scripts/
+__pycache__/
+.pytest_cache/
+pyproject.toml
+uv.lock
+
+# Build caches / installs — Vercel regenerates these
+.next/
+node_modules/
+
+# Generated run artifacts (large WAVs)
+runs/
+artifacts/
+
+# Backend deploy configs
+Dockerfile
+docker-compose.yml
+.dockerignore
+railway.json
+deploy/
+
+# Secrets — must never be uploaded
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# Repo / local tooling cruft
+.git/
+.github/
+docs/
+.rocketride/
+.claude/
+.cursor/
+.codex/
+.playwright-mcp/
