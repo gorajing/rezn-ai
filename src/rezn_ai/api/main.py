@@ -13,7 +13,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -138,6 +138,57 @@ taste = _build_taste(store)
 conductor = BatchConductor(store=store, engine=engine, artifacts_root=ARTIFACTS_ROOT, taste=taste)
 
 
+# ── Rate limiting (per client IP) ─────────────────────────────────────────────
+# The generation endpoints below spend LLM tokens, so they are throttled per IP to
+# keep one caller (or a runaway loop) from burning the whole credit pool at once.
+# Disabled for the hermetic test suite (REZN_DISABLE_REDIS) and via
+# REZN_RATE_LIMIT_DISABLED=true; the per-minute/per-day budgets are env-tunable.
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+_RATE_PER_MIN = _int_env("REZN_RATE_LIMIT_PER_MIN", 5)
+_RATE_PER_DAY = _int_env("REZN_RATE_LIMIT_PER_DAY", 50)
+
+
+def _rate_limit_enabled() -> bool:
+    if is_truthy(os.getenv("REZN_DISABLE_REDIS")):
+        return False  # hermetic tests run on InMemoryStore — never throttle the suite
+    return not is_truthy(os.getenv("REZN_RATE_LIMIT_DISABLED"))
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP. Behind Railway/Vercel the real client is the first hop
+    in ``X-Forwarded-For``; fall back to the socket peer."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_rate_limit(request: Request, scope: str) -> None:
+    """Raise 429 when the caller exceeds the per-minute or per-day budget for an
+    LLM-spending ``scope``, keyed on client IP. No-op when rate limiting is off."""
+    if not _rate_limit_enabled():
+        return
+    ip = _client_ip(request)
+    for limit, window, label in ((_RATE_PER_MIN, 60, "min"), (_RATE_PER_DAY, 86_400, "day")):
+        if limit <= 0:
+            continue
+        allowed, retry_after = store.rate_limit(f"{scope}:{label}:{ip}", limit, window)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded ({limit} per {label}). Try again in {retry_after}s.",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+
 # ── Health & doctor ─────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -199,7 +250,8 @@ def doctor() -> DoctorResponse:
 # ── Batches ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/batches", response_model=Batch)
-def create_batch(request: BatchCreateRequest) -> Batch:
+def create_batch(request: BatchCreateRequest, http_request: Request) -> Batch:
+    _enforce_rate_limit(http_request, "batches")
     try:
         return conductor.start_batch(request)
     except ValueError as exc:
@@ -223,8 +275,9 @@ def get_batch_events(batch_id: str) -> list[BatchEvent]:
 
 
 @app.post("/api/batches/{batch_id}/refine", response_model=Batch)
-def refine_batch(batch_id: str, request: RefineRequest | None = None) -> Batch:
+def refine_batch(batch_id: str, http_request: Request, request: RefineRequest | None = None) -> Batch:
     """Generate a child batch from this batch's approve/reject feedback."""
+    _enforce_rate_limit(http_request, "refine")
     count = request.candidate_count if request else None
     try:
         return conductor.refine_batch(batch_id, candidate_count=count)
@@ -271,7 +324,8 @@ def reject_candidate(candidate_id: str, request: FeedbackRequest) -> Candidate:
 
 
 @app.post("/api/candidates/{candidate_id}/variant", response_model=Candidate)
-def request_variant(candidate_id: str, request: FeedbackRequest) -> Candidate:
+def request_variant(candidate_id: str, request: FeedbackRequest, http_request: Request) -> Candidate:
+    _enforce_rate_limit(http_request, "variant")
     try:
         return conductor.request_variant(candidate_id, request.note)
     except KeyError as exc:

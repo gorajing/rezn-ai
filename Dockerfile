@@ -22,4 +22,6 @@ EXPOSE 8000
 
 # Honors REZN_PRODUCTION, REDIS_URL, AGENT_MEMORY_*, WANDB_API_KEY,
 # REZN_ENABLE_INFERENCE, REZN_INFERENCE_REQUIRED, REZN_CORS_ORIGINS from env.
-CMD ["uvicorn", "rezn_ai.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form so $PORT (set by Railway and most PaaS hosts) is honored; falls back
+# to 8000 for local `docker run`.
+CMD uvicorn rezn_ai.api.main:app --host 0.0.0.0 --port ${PORT:-8000}

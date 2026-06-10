@@ -35,7 +35,14 @@ def redis_required() -> bool:
 
 
 def agent_memory_required() -> bool:
-    return production_mode() or is_truthy(os.getenv("AGENT_MEMORY_REQUIRED"))
+    # An explicit ``AGENT_MEMORY_REQUIRED=false`` opts out even under
+    # ``REZN_PRODUCTION=true``: taste memory then degrades to the local fallback
+    # instead of failing the whole deploy when the managed Agent Memory service is
+    # unavailable. Unset (or a truthy value) keeps the strict production default.
+    explicit = os.getenv("AGENT_MEMORY_REQUIRED")
+    if explicit is not None and not is_truthy(explicit):
+        return False
+    return production_mode() or is_truthy(explicit)
 
 
 def inference_required() -> bool:

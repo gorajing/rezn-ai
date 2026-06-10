@@ -8,6 +8,7 @@ with plain Python; the batch event list carries the same information.
 from __future__ import annotations
 
 import threading
+import time
 from copy import deepcopy
 from typing import Any
 
@@ -31,6 +32,9 @@ class InMemoryStore:
         self._decisions: dict[str, list[dict[str, Any]]] = {}
         self._claims: set[str] = set()
         self._claims_lock = threading.Lock()
+        # Fixed-window rate-limit counters: key -> (window_start_monotonic, count).
+        self._rate_windows: dict[str, tuple[float, int]] = {}
+        self._rate_lock = threading.Lock()
 
     # ── Batches ──────────────────────────────────────────────────────────────
 
@@ -141,6 +145,24 @@ class InMemoryStore:
                 return False
             self._claims.add(key)
             return True
+
+    def rate_limit(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
+        """Fixed-window per-key rate limit (parity with RedisStore.rate_limit).
+
+        Lock-guarded; uses a monotonic clock so the window resets after
+        ``window_seconds``. Returns ``(allowed, retry_after_seconds)``.
+        """
+        now = time.monotonic()
+        with self._rate_lock:
+            window_start, count = self._rate_windows.get(key, (now, 0))
+            if now - window_start >= window_seconds:
+                window_start, count = now, 0
+            count += 1
+            self._rate_windows[key] = (window_start, count)
+            if count > limit:
+                retry_after = int(window_seconds - (now - window_start)) + 1
+                return (False, max(retry_after, 1))
+            return (True, 0)
 
     def append_decision(self, producer_id: str, decision: dict[str, Any]) -> None:
         self._decisions.setdefault(producer_id, []).append(deepcopy(decision))

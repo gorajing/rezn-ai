@@ -46,17 +46,34 @@ Set **`REZN_PRODUCTION=true`** on the API — the master switch that forbids all
 | `AGENT_MEMORY_URL` | Redis Cloud Agent Memory service endpoint |
 | `AGENT_MEMORY_STORE_ID` | Store ID from the Agent Memory console |
 | `AGENT_MEMORY_API_KEY` | Service API key (Bearer token) |
-| `AGENT_MEMORY_REQUIRED=true` | Fail fast if Agent Memory is missing/unreachable |
+| `AGENT_MEMORY_REQUIRED` | `true` = fail fast if Agent Memory is unreachable; `false` = stay up on the local taste fallback (resilient — recommended for an unattended public deploy). An explicit `false` wins even under `REZN_PRODUCTION`. |
 | `REZN_ENABLE_INFERENCE=1` | Live W&B Inference for brief interpretation + critic/composer |
 | `REZN_INFERENCE_REQUIRED=true` | Fail on LLM errors instead of keyword fallback |
 | `WANDB_API_KEY` | Weave tracing + W&B Inference |
 | `REZN_ENGINE=rezn` | Clean-room synth engine (never `local` in production) |
 | `REZN_CORS_ORIGINS=https://<your-frontend>.vercel.app` | Allow the deployed UI |
+| `REZN_RATE_LIMIT_PER_MIN=5` | Per-IP cap on the LLM-spending endpoints (`/api/batches`, `/refine`, `/variant`) |
+| `REZN_RATE_LIMIT_PER_DAY=50` | Per-IP daily cap. `REZN_RATE_LIMIT_DISABLED=true` turns limiting off |
+
+> The full var lists ready to paste live in `deploy/railway.env.example` (backend) and
+> `deploy/vercel.env.example` (frontend).
 
 **Never set in production:** `REZN_DISABLE_REDIS`, `REZN_ENGINE=local`
 
-### API → any container host (Render / Railway / Fly.io)
-The repo `Dockerfile` builds it. Example (Fly):
+### API → Railway (recommended) or any container host
+
+The repo `Dockerfile` builds it (its `CMD` honors `$PORT`). For **Railway**, `railway.json`
+already pins the Dockerfile build, the `/health` healthcheck, restart policy, and a single
+replica:
+
+```bash
+railway login && railway up
+# then in the Railway dashboard:
+#   • add a persistent Volume mounted at /app/artifacts   (keeps preview audio across restarts)
+#   • set variables from deploy/railway.env.example       (paste secret values from your .env)
+```
+
+For **Fly / Render**, the same image works — example (Fly):
 
 ```bash
 fly secrets set \
@@ -87,6 +104,18 @@ Set Vercel project env vars:
 
 Then redeploy. The Control Room will call the live API for batches, curation,
 refine, and preview audio.
+
+## Guardrails & cost
+
+- **Rate limiting** (per client IP) protects the LLM-spending endpoints — default 5/min,
+  50/day, tunable via `REZN_RATE_LIMIT_*`. It bounds burst abuse; it is **not** a spend cap.
+- **The real ceiling is your prepaid credits.** OpenAI is effectively the only burn-down
+  meter (Weave is free-tier; Redis Cloud / Railway are fixed plans). If OpenAI
+  **auto-recharge** is ON you never "run out" — it bills your card. Set a hard monthly usage
+  limit in the OpenAI dashboard for a true stop.
+- **Unprotected surface:** the CopilotKit chat runs server-side on Vercel with your
+  `OPENAI_API_KEY` and is *not* behind the backend limiter — the OpenAI cap is its only
+  backstop. Drop `OPENAI_API_KEY` from Vercel to disable just the chat (clean 503).
 
 ## Smoke test after deploy
 ```bash

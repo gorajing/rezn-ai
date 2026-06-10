@@ -491,6 +491,25 @@ class RedisStore:
         )
         return bool(self._r.set(key, "1", nx=True, ex=ex))
 
+    def rate_limit(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
+        """Fixed-window per-key rate limit. Increments the window counter for ``key``
+        and returns ``(allowed, retry_after_seconds)``.
+
+        ``allowed`` is True while the window count is at or below ``limit``;
+        ``retry_after_seconds`` is the time until the window resets (0 when allowed).
+        ``INCR`` is atomic, so concurrent callers share one counter; the first hit in
+        a window arms the expiry. Counters live under ``rezn:ratelimit:*`` and self-
+        expire, so they are never part of the demo run-state or learned-memory keyspace.
+        """
+        rkey = f"rezn:ratelimit:{key}"
+        count = int(self._r.incr(rkey))
+        if count == 1:
+            self._r.expire(rkey, window_seconds)
+        if count > limit:
+            ttl = int(self._r.ttl(rkey))
+            return (False, ttl if ttl > 0 else window_seconds)
+        return (True, 0)
+
     def purge_demo_state(self, *, execute: bool = False) -> dict[str, int]:
         """SCAN and (when ``execute``) UNLINK ephemeral demo run-state, always
         preserving learned state (rezn:lessons:*, rezn:taste:*). Strictly scoped to
