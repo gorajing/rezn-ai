@@ -36,7 +36,9 @@ def test_combined_midi_bytes_is_valid_multitrack():
 def _start_one(client) -> dict:
     res = client.post("/api/batches", json={"brief": {"prompt": "dark techno", "candidate_count": 1}})
     assert res.status_code == 200, res.text
-    return res.json()["candidates"][0]
+    # Generation runs as a background task (synchronous under TestClient) — fetch the result.
+    batch = client.get(f"/api/batches/{res.json()['batch_id']}").json()
+    return batch["candidates"][0]
 
 
 def test_midi_endpoint_returns_combined_attachment(client):

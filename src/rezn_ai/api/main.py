@@ -14,7 +14,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -253,12 +253,18 @@ def doctor() -> DoctorResponse:
 # ── Batches ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/batches", response_model=Batch)
-def create_batch(request: BatchCreateRequest, http_request: Request) -> Batch:
+def create_batch(
+    request: BatchCreateRequest, http_request: Request, background: BackgroundTasks
+) -> Batch:
     _enforce_rate_limit(http_request, "batches")
     try:
-        return conductor.start_batch(request)
+        batch = conductor.begin_batch(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Generate asynchronously: a slow synchronous generation outlasts the browser
+    # connection. The request returns a 'running' batch immediately; the UI polls it.
+    background.add_task(conductor.generate_batch, request, batch.batch_id)
+    return batch
 
 
 @app.get("/api/batches/{batch_id}", response_model=Batch)

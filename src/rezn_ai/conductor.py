@@ -598,8 +598,9 @@ class BatchConductor:
                  "strategies": list(COMPOSER_STRATEGIES)},
             )
 
-        results = self.engine.orchestrate_batch(brief, batch_id, self.artifacts_root, bias=bias)
-        for result in results:
+        def _persist(result: CandidateResult) -> None:
+            # Save + announce each candidate the instant it renders, so a polling UI
+            # shows candidates appear progressively during async generation.
             candidate = self._to_candidate(result, batch_id)
             self._stamp_preference(candidate, bias.strategy_boosts)
             self.store.save_candidate(candidate)
@@ -612,6 +613,10 @@ class BatchConductor:
                  "phase": "batch"},
             )
 
+        self.engine.orchestrate_batch(
+            brief, batch_id, self.artifacts_root, bias=bias, on_candidate=_persist
+        )
+
         batch = self.store.get_batch(batch_id)
         batch.status = "ranked"
         self.store.save_batch(batch)
@@ -623,6 +628,40 @@ class BatchConductor:
         )
         self._emit_panel_events(batch_id, batch.candidates)
         return self.store.get_batch(batch_id)
+
+    # ── Async generation (API path: respond fast, generate in the background) ──
+
+    def begin_batch(self, request: BatchCreateRequest) -> Batch:
+        """Create the batch record immediately (status 'running') and return it without
+        generating, so the API responds fast and the UI can poll. The heavy generation
+        runs separately via ``generate_batch`` (scheduled as a background task)."""
+        batch = Batch(batch_id=new_id("batch"), brief=request.brief, status="running")
+        self.store.save_batch(batch)
+        return batch
+
+    def generate_batch(self, request: BatchCreateRequest, batch_id: str) -> None:
+        """Run the (slow) generation for an already-created batch. Meant to run in a
+        background task: any failure is recorded on the batch (status 'failed' + event)
+        for the UI rather than raised, so the worker never crashes silently."""
+        try:
+            with self._agent_turn(
+                conversation_id=batch_id,
+                user_message=request.brief.prompt,
+                session_name=request.brief.prompt[:60],
+            ):
+                self._do_start_batch(request, batch_id)
+        except Exception as exc:  # noqa: BLE001 - background task records, never crashes
+            logger.exception("Batch generation failed for %s", batch_id)
+            self._fail_batch(batch_id, exc)
+
+    def _fail_batch(self, batch_id: str, exc: Exception) -> None:
+        try:
+            batch = self.store.get_batch(batch_id)
+            batch.status = "failed"
+            self.store.save_batch(batch)
+        except Exception:  # noqa: BLE001 - the batch record may be absent
+            pass
+        self._event(batch_id, "batch.failed", "Generation failed — please try again.", {"error": str(exc)})
 
     # ── Human-in-the-loop curation ───────────────────────────────────────────
 

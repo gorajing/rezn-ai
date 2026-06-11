@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from ..memory.taste import PlanningBias
@@ -56,8 +56,12 @@ class GeneratorEngine(Protocol):
         artifacts_root: Path,
         *,
         bias: "PlanningBias | None" = None,
+        on_candidate: "Callable[[CandidateResult], None] | None" = None,
     ) -> list[CandidateResult]:
-        """Generate ``brief.candidate_count`` candidates, ranked best-first."""
+        """Generate ``brief.candidate_count`` candidates, ranked best-first.
+
+        ``on_candidate`` (optional) is called with each result as it is rendered so
+        callers can persist/stream candidates progressively."""
 
     def generate_variant(
         self,

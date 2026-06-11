@@ -35,7 +35,7 @@ def test_deep_mode_emits_llm_sourced_panel(client, monkeypatch):
         "/api/batches", json={"brief": {"prompt": "deep techno", "candidate_count": 3}}
     )
     assert resp.status_code == 200, resp.text
-    batch = resp.json()
+    batch = client.get(f"/api/batches/{resp.json()['batch_id']}").json()
     panel = [
         e
         for e in batch["events"]
@@ -57,7 +57,7 @@ def test_deep_requested_without_inference_warns(client, monkeypatch):
         "/api/batches", json={"brief": {"prompt": "x", "candidate_count": 2}}
     )
     assert resp.status_code == 200, resp.text
-    batch = resp.json()
+    batch = client.get(f"/api/batches/{resp.json()['batch_id']}").json()
     warns = [
         e for e in batch["events"] if (e.get("payload") or {}).get("warning") == "deep_mode_unavailable"
     ]

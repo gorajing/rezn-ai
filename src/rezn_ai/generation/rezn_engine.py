@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from ..memory.taste import PlanningBias
@@ -47,6 +47,7 @@ class ReznGeneratorEngine:
         artifacts_root: Path,
         *,
         bias: "PlanningBias | None" = None,
+        on_candidate: "Callable[[CandidateResult], None] | None" = None,
     ) -> list[CandidateResult]:
         plan = plan_candidates(
             prompt=brief.prompt,
@@ -61,16 +62,20 @@ class ReznGeneratorEngine:
         taste = bias.profile_weights if bias is not None else None
         taste_strength = bias.confidence if bias is not None else 1.0
         policy_version = bias.policy_version if bias is not None else 0
-        results = [
-            self._render(
+        results: list[CandidateResult] = []
+        for params in plan:
+            result = self._render(
                 batch_id, artifacts_root, params, brief, guidance,
                 prompt_policy=policies.get(params.strategy),
                 taste=taste,
                 taste_strength=taste_strength,
                 policy_version=policy_version,
             )
-            for params in plan
-        ]
+            results.append(result)
+            # Emit each candidate as soon as it renders so the conductor can persist
+            # and stream it progressively (the UI shows candidates appear one by one).
+            if on_candidate is not None:
+                on_candidate(result)
         results.sort(key=lambda r: r.technical_score, reverse=True)
         return results
 

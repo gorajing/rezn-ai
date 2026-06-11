@@ -8,7 +8,9 @@ def test_batch_surfaces_every_ensemble_agent(client):
         json={"brief": {"prompt": "dark warehouse techno", "candidate_count": 3}},
     )
     assert resp.status_code == 200, resp.text
-    batch = resp.json()
+    # Generation (and its ensemble events) runs in a background task — synchronous under
+    # TestClient — so fetch the populated batch rather than the immediate 'running' one.
+    batch = client.get(f"/api/batches/{resp.json()['batch_id']}").json()
 
     agent_ids = {
         e["payload"]["agent_id"]

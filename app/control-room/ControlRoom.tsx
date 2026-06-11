@@ -179,23 +179,9 @@ export function ControlRoom() {
         });
         doneEmbed();
         doneGen();
-        const doneRank = trackAction("rankCandidates", `Scored ${batch.candidates.length} candidates`, source);
+        // The batch returns 'running' and generates asynchronously; register it so the
+        // poller (below) applies candidates as they land and posts the summary when ranked.
         applyBatch(batch);
-        setBatchStatus("ranked");
-        doneRank();
-        const top = rankCandidates(batch.candidates)[0];
-        if (top) {
-          // Snap the brief readout to what the engine ACTUALLY resolved (the chip's
-          // values are only a pre-generation preview; with live inference the key/
-          // tempo can differ from the deterministic guess). Candidates share key/mode.
-          setActiveBrief((b) => ({ genre: b?.genre, key: top.key, mode: top.mode, tempo: top.tempo }));
-          say(
-            "assistant",
-            `Generated ${batch.candidates.length} candidates. "${top.label}" leads at ${Math.round(
-              top.score * 100,
-            )}. Listen and curate — approve, reject, or request a variant.`,
-          );
-        }
       } catch (err) {
         doneEmbed("error");
         doneGen("error");
@@ -206,6 +192,52 @@ export function ControlRoom() {
     },
     [batchStatus, applyBatch, pushEvent, say, trackAction],
   );
+
+  // ── Async generation: poll the running batch until it ranks ─────────────────
+  // The API generates in the background, so a fresh batch starts 'running' with no
+  // candidates. Poll it, applying candidates as they appear, until ranked or failed.
+  const summarizedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (batchStatus !== "generating" || !batchId) return;
+    let active = true;
+    const poll = async () => {
+      let batch: ApiBatch;
+      try {
+        batch = await api.getBatch(batchId);
+      } catch {
+        return; // transient blip — keep polling
+      }
+      if (!active) return;
+      applyBatch(batch);
+      if (batch.status === "ranked" || batch.status === "completed") {
+        setBatchStatus("ranked");
+        if (summarizedRef.current !== batchId) {
+          summarizedRef.current = batchId;
+          const top = rankCandidates(batch.candidates)[0];
+          if (top) {
+            setActiveBrief((b) => ({ genre: b?.genre, key: top.key, mode: top.mode, tempo: top.tempo }));
+            say(
+              "assistant",
+              `Generated ${batch.candidates.length} candidates. "${top.label}" leads at ${Math.round(
+                top.score * 100,
+              )}. Listen and curate — approve, reject, or request a variant.`,
+            );
+          }
+        }
+      } else if (batch.status === "failed" && summarizedRef.current !== batchId) {
+        summarizedRef.current = batchId;
+        setBatchStatus("idle");
+        pushEvent("warn", "Generation failed — please try again.");
+        say("assistant", "Generation failed — please try again.");
+      }
+    };
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [batchStatus, batchId, applyBatch, pushEvent, say]);
 
   // A starter chip generates with its own genre/key/mode/tempo (not the defaults),
   // and syncs the brief readout to match.

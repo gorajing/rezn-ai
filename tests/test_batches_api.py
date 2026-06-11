@@ -14,9 +14,11 @@ def _brief(count: int = 2) -> dict:
 
 
 def _start(client, count: int = 2) -> dict:
+    # The POST returns a 'running' batch and generates in a background task (which runs
+    # synchronously under TestClient); fetch the populated, ranked batch.
     response = client.post("/api/batches", json={"brief": _brief(count)})
     assert response.status_code == 200, response.text
-    return response.json()
+    return client.get(f"/api/batches/{response.json()['batch_id']}").json()
 
 
 # ── Doctor ────────────────────────────────────────────────────────────────────
