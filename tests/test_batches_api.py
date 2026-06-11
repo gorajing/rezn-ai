@@ -199,9 +199,12 @@ def test_refine_creates_child_batch_from_feedback(client) -> None:
     client.post(f"/api/candidates/{candidates[0]['candidate_id']}/approve")
     client.post(f"/api/candidates/{candidates[-1]['candidate_id']}/reject", json={"note": "weak"})
 
-    refined = client.post(f"/api/batches/{batch_id}/refine").json()
-    assert refined["batch_id"] != batch_id
-    assert refined["parent_batch_id"] == batch_id
+    started = client.post(f"/api/batches/{batch_id}/refine").json()
+    assert started["batch_id"] != batch_id
+    assert started["parent_batch_id"] == batch_id
+    # Refine is async: it generates in a background task (synchronous under TestClient),
+    # so the POST returns a 'running' child; fetch the populated, ranked result.
+    refined = client.get(f"/api/batches/{started['batch_id']}").json()
     assert refined["status"] == "ranked"
     assert len(refined["candidates"]) == 4
 

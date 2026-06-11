@@ -284,16 +284,22 @@ def get_batch_events(batch_id: str) -> list[BatchEvent]:
 
 
 @app.post("/api/batches/{batch_id}/refine", response_model=Batch)
-def refine_batch(batch_id: str, http_request: Request, request: RefineRequest | None = None) -> Batch:
-    """Generate a child batch from this batch's approve/reject feedback."""
+def refine_batch(
+    batch_id: str, http_request: Request, background: BackgroundTasks, request: RefineRequest | None = None
+) -> Batch:
+    """Generate a child batch from this batch's approve/reject feedback — asynchronously,
+    like POST /api/batches: returns a 'running' child immediately and generates in the
+    background (a synchronous refine outlasts the browser connection). The UI polls it."""
     _enforce_rate_limit(http_request, "refine")
     count = request.candidate_count if request else None
     try:
-        return conductor.refine_batch(batch_id, candidate_count=count)
+        child = conductor.begin_refine(batch_id, candidate_count=count)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Batch not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    background.add_task(conductor.generate_refine, batch_id, child.batch_id, count)
+    return child
 
 
 @app.post("/api/batches/{batch_id}/select-final", response_model=Batch)

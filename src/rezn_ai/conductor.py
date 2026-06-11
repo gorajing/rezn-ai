@@ -832,7 +832,38 @@ class BatchConductor:
         ):
             return self._do_refine_batch(parent_batch_id, candidate_count)
 
-    def _do_refine_batch(self, parent_batch_id: str, candidate_count: int | None = None) -> Batch:
+    def begin_refine(self, parent_batch_id: str, candidate_count: int | None = None) -> Batch:
+        """Create the child batch record (status 'running') immediately and return it,
+        without generating — the async (API) counterpart to refine_batch. Validates the
+        parent here so the endpoint can reject bad input synchronously."""
+        parent = self.store.get_batch(parent_batch_id)  # KeyError -> 404
+        if not parent.candidates:
+            raise ValueError(f"batch {parent_batch_id} has no candidates to refine from")
+        child = Batch(
+            batch_id=new_id("batch"), brief=parent.brief, status="running",
+            parent_batch_id=parent_batch_id,
+        )
+        self.store.save_batch(child)
+        return child
+
+    def generate_refine(
+        self, parent_batch_id: str, child_batch_id: str, candidate_count: int | None = None
+    ) -> None:
+        """Run the (slow) refinement for an already-created child batch. Meant to run in a
+        background task: records status='failed' + event on error rather than crashing."""
+        try:
+            with self._agent_turn(
+                conversation_id=self._conversation_id(parent_batch_id),
+                user_message=f"Refine batch {parent_batch_id}",
+            ):
+                self._do_refine_batch(parent_batch_id, candidate_count, child_id=child_batch_id)
+        except Exception as exc:  # noqa: BLE001 - background task records, never crashes
+            logger.exception("Refine generation failed for child of %s", parent_batch_id)
+            self._fail_batch(child_batch_id, exc)
+
+    def _do_refine_batch(
+        self, parent_batch_id: str, candidate_count: int | None = None, *, child_id: str | None = None
+    ) -> Batch:
         """Generate a child batch that learns from the parent's feedback and songs.
 
         The reflector agent reads the previous candidates (scores + critic reasons)
@@ -871,7 +902,7 @@ class BatchConductor:
             sum(c.technical_score for c in parent_candidates) / len(parent_candidates), 4
         )
 
-        child_id = new_id("batch")
+        child_id = child_id or new_id("batch")
         self.store.save_batch(
             Batch(batch_id=child_id, brief=parent.brief, status="running", parent_batch_id=parent_batch_id)
         )

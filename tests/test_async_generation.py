@@ -49,6 +49,41 @@ def test_begin_batch_is_immediate_and_generate_fills_it(redis_store, fast_engine
     assert len(done.candidates) == 2
 
 
+def test_refine_returns_running_then_background_populates(client):
+    res = client.post("/api/batches", json={"brief": {"prompt": "techno", "candidate_count": 2}})
+    parent = client.get(f"/api/batches/{res.json()['batch_id']}").json()
+    pid = parent["batch_id"]
+
+    r = client.post(f"/api/batches/{pid}/refine")
+    assert r.status_code == 200, r.text
+    child = r.json()
+    assert child["status"] == "running"
+    assert child["candidates"] == []
+    assert child["parent_batch_id"] == pid
+
+    done = client.get(f"/api/batches/{child['batch_id']}").json()
+    assert done["status"] == "ranked"
+    assert len(done["candidates"]) >= 1
+
+
+def test_begin_refine_then_generate_refine_fills_child(redis_store, fast_engine, tmp_path):
+    cond = BatchConductor(store=redis_store, engine=fast_engine, artifacts_root=tmp_path)
+    parent = cond.start_batch(_req(2))
+    child = cond.begin_refine(parent.batch_id)
+    assert child.status == "running"
+    assert child.candidates == []
+    assert child.parent_batch_id == parent.batch_id
+
+    cond.generate_refine(parent.batch_id, child.batch_id)
+    done = cond.store.get_batch(child.batch_id)
+    assert done.status == "ranked"
+    assert len(done.candidates) >= 1
+
+
+def test_refine_404_for_missing_parent(client):
+    assert client.post("/api/batches/batch_missing/refine").status_code == 404
+
+
 def test_generate_batch_marks_failed_on_engine_error(redis_store, tmp_path):
     class BoomEngine:
         def orchestrate_batch(self, *a, **k):

@@ -218,9 +218,13 @@ export function ControlRoom() {
             setActiveBrief((b) => ({ genre: b?.genre, key: top.key, mode: top.mode, tempo: top.tempo }));
             say(
               "assistant",
-              `Generated ${batch.candidates.length} candidates. "${top.label}" leads at ${Math.round(
-                top.score * 100,
-              )}. Listen and curate — approve, reject, or request a variant.`,
+              batch.parent_batch_id
+                ? `Refined batch ready — weighted toward what you approved. "${top.label}" now leads at ${Math.round(
+                    top.score * 100,
+                  )}.`
+                : `Generated ${batch.candidates.length} candidates. "${top.label}" leads at ${Math.round(
+                    top.score * 100,
+                  )}. Listen and curate — approve, reject, or request a variant.`,
             );
           }
         }
@@ -316,19 +320,11 @@ export function ControlRoom() {
       try {
         const child = await api.refine(batchId);
         doneFb();
-        applyBatch(child);
-        setBatchStatus("ranked");
-        setPrompt((p) => (p ? `${p} (refined)` : p));
         doneRefine();
-        const top = rankCandidates(child.candidates)[0];
-        if (top) {
-          say(
-            "assistant",
-            `Refined batch ready — weighted toward what you approved. "${top.label}" now leads at ${Math.round(
-              top.score * 100,
-            )}.`,
-          );
-        }
+        setPrompt((p) => (p ? `${p} (refined)` : p));
+        // The child starts 'running' and generates asynchronously; register it so the
+        // poller fills in candidates and posts the summary when it ranks.
+        applyBatch(child);
       } catch (err) {
         doneFb("error");
         doneRefine("error");

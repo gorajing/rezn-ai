@@ -47,21 +47,22 @@ in agent memory (`rezn-deployment`).
 
 ## Remaining / open items (prioritized)
 
-### P1 — Make `refine_batch` asynchronous (same bug class as the one just fixed)
-`POST /api/batches/{id}/refine` (`api/main.py` ~L287 → `conductor.refine_batch`) still
-generates a child batch **synchronously** (N candidates, tens of seconds). The UI
-(`ControlRoom.tsx` `handleRefine`, ~L317 `await api.refine(batchId)`) awaits it. So refine
-will intermittently drop the browser connection exactly like initial generation did before
-this session. **Fix:** mirror the async pattern already built for `start_batch`:
-- Conductor: add `begin_refine(parent_batch_id)` (create the child batch record `running`, return it) + `generate_refine(parent_batch_id, ...)` (the current `refine_batch` body, wrapped in the agent turn + `try/except → _fail_batch`).
-- API: `refine_batch` endpoint creates via `begin_refine`, schedules `generate_refine` via `BackgroundTasks`, returns the running child.
-- UI: `handleRefine` sets the child `batchId` + `batchStatus="generating"` and lets the existing poller (`ControlRoom.tsx`) take over — the poller is generic, it just needs the child batch id.
-- Reference implementation to copy: commit `6dd08a9` (`begin_batch`/`generate_batch`/`_fail_batch` in `conductor.py`, `BackgroundTasks` in `create_batch`, the poll `useEffect` in `ControlRoom.tsx`).
+### ✅ DONE — `refine_batch` is now asynchronous
+Refine was synchronous and dropped the browser connection on slow generations (the symptom
+that surfaced this). Fixed by mirroring the `start_batch` pattern: `conductor.begin_refine`
+(fast child record, `running`) + `generate_refine` (background, → `_fail_batch` on error),
+`BackgroundTasks` in the `/refine` endpoint, and the existing ControlRoom poller (now
+refine-aware via `parent_batch_id`). `refine_batch` stays synchronous for direct callers.
+Verified: full suite passes; the refine POST returns a `running` child and candidates stream
+in via the poller.
 
-### P2 — Make `request_variant` asynchronous
-`api/main.py` ~L336 → `conductor.request_variant` is synchronous too (generates **1** variant
-candidate, so smaller risk, but the same failure mode under slow inference). Same async
-pattern, scoped to a single candidate.
+### P1 — Make `request_variant` asynchronous (the last synchronous generation path)
+`api/main.py` `request_variant` → `conductor.request_variant` is still synchronous (generates
+**1** variant candidate, so smaller risk, but the same failure mode under slow inference).
+Apply the same async pattern, scoped to a single candidate: `begin_variant` (return a
+placeholder/pending candidate or its parent batch in `running`) + `generate_variant`
+(background) + `BackgroundTasks` + UI poll in `handleVariant`. Mirror the refine/`start_batch`
+commits (`6dd08a9` for the initial generation, plus the refine commit in this session's log).
 
 ### P2 — Re-enable the CopilotKit chat (optional product feature)
 Gated off via `NEXT_PUBLIC_ENABLE_CHAT` (in `app/layout.tsx` + `ControlRoom.tsx`). It has **no
