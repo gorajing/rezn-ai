@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Candidate, CandidateStatus } from "../types";
+import { API_BASE } from "../../lib/api";
 import { Waveform } from "./Waveform";
 import { ScoreRing } from "./ScoreRing";
 import { ScoreBreakdown } from "./ScoreBreakdown";
@@ -337,6 +338,25 @@ export function CandidateCard({
           </div>
         </div>
       </div>
+
+      {/* Downloads — WAV + a single DAW-ready multitrack .mid (attachments) */}
+      {hasAudio && (
+        <div className="flex items-center gap-2 text-[11px] text-subtle">
+          <span>Download</span>
+          <a
+            href={`${API_BASE}/api/candidates/${candidate.id}/audio`}
+            className="rounded-full border border-line bg-surface-2 px-2.5 py-0.5 font-mono text-muted transition-colors hover:border-accent/40 hover:bg-accent-dim hover:text-accent"
+          >
+            WAV
+          </a>
+          <a
+            href={`${API_BASE}/api/candidates/${candidate.id}/midi`}
+            className="rounded-full border border-line bg-surface-2 px-2.5 py-0.5 font-mono text-muted transition-colors hover:border-accent/40 hover:bg-accent-dim hover:text-accent"
+          >
+            MIDI
+          </a>
+        </div>
+      )}
 
       {/* Top reason */}
       <p className="flex items-center gap-1.5 text-xs text-muted">

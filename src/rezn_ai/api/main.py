@@ -7,6 +7,7 @@ production). Preview audio is served from the /artifacts mount.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import asdict
@@ -15,6 +16,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ..agents.llm_agents import inference_enabled
@@ -23,6 +25,7 @@ from ..config import is_truthy, production_mode, redis_required, validate_deploy
 from ..conductor import BatchConductor
 from ..generation.rezn_engine import ReznGeneratorEngine
 from ..memory.taste import build_taste_memory
+from ..music.midi import combined_midi_bytes
 from ..models import (
     Batch,
     BatchCreateRequest,
@@ -332,6 +335,56 @@ def request_variant(candidate_id: str, request: FeedbackRequest, http_request: R
         raise HTTPException(status_code=404, detail="Candidate not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── Per-candidate downloads (WAV + combined multitrack MIDI) ──────────────────
+
+
+def _get_candidate_or_404(candidate_id: str) -> Candidate:
+    try:
+        return store.get_candidate(candidate_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Candidate not found") from exc
+
+
+def _artifact_path(url: str | None) -> Path | None:
+    """Resolve an ``/artifacts/...`` URL to a disk path under the conductor's artifacts
+    root, guarding against path traversal. Returns None when the URL is invalid."""
+    prefix = "/artifacts/"
+    if not url or not url.startswith(prefix):
+        return None
+    root = conductor.artifacts_root.resolve()
+    path = (root / url[len(prefix):]).resolve()
+    if path != root and root not in path.parents:
+        return None
+    return path
+
+
+@app.get("/api/candidates/{candidate_id}/audio")
+def download_audio(candidate_id: str) -> FileResponse:
+    """Download the candidate's preview WAV as an attachment (so it saves rather than
+    plays — the browser ignores the <a download> attribute cross-origin)."""
+    candidate = _get_candidate_or_404(candidate_id)
+    path = _artifact_path(candidate.audio_url)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="Audio not found")
+    return FileResponse(path, media_type="audio/wav", filename=f"{candidate_id}.wav")
+
+
+@app.get("/api/candidates/{candidate_id}/midi")
+def download_midi(candidate_id: str) -> Response:
+    """Download the candidate as one DAW-ready multitrack .mid, re-exported from its
+    stored arrangement (every part a named track in a single file)."""
+    candidate = _get_candidate_or_404(candidate_id)
+    path = _artifact_path(candidate.arrangement_url)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="Arrangement not found")
+    arrangement = json.loads(path.read_text())
+    return Response(
+        content=combined_midi_bytes(arrangement),
+        media_type="audio/midi",
+        headers={"Content-Disposition": f'attachment; filename="{candidate_id}.mid"'},
+    )
 
 
 # ── Refinement memory ───────────────────────────────────────────────────────

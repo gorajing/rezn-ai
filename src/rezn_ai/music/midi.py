@@ -47,7 +47,7 @@ def _tempo_track(tempo_bpm: float) -> bytes:
     return _track_chunk(tempo + end)
 
 
-def _note_track(notes: list[dict[str, Any]], channel: int) -> bytes:
+def _note_track(notes: list[dict[str, Any]], channel: int, *, name: str | None = None) -> bytes:
     events: list[tuple[int, int, int, int]] = []
     for note in notes:
         start_tick = round(float(note["start"]) * TICKS_PER_BEAT)
@@ -60,6 +60,10 @@ def _note_track(notes: list[dict[str, Any]], channel: int) -> bytes:
     events.sort(key=lambda event: (event[0], event[1] != (0x80 | channel)))
     cursor = 0
     payload = bytearray()
+    if name:
+        # Track-name meta event (FF 03) at delta 0 so DAWs label the track.
+        label = name.encode("ascii", "replace")[:127]
+        payload += b"\x00\xff\x03" + _varlen(len(label)) + label
     for tick, status, pitch, velocity in events:
         payload += _varlen(tick - cursor)
         payload += bytes((status, pitch, velocity))
@@ -73,6 +77,32 @@ def write_midi_file(notes: list[dict[str, Any]], path: Path, *, tempo_bpm: float
     header = b"MThd" + _u32(6) + _u16(1) + _u16(2) + _u16(TICKS_PER_BEAT)
     body = _tempo_track(tempo_bpm) + _note_track(notes, channel)
     path.write_bytes(header + body)
+    return path
+
+
+def combined_midi_bytes(arrangement: dict[str, Any]) -> bytes:
+    """Render every arrangement part into ONE multitrack SMF (format 1): a tempo
+    track plus one named note track per non-empty part, each on its own channel.
+
+    This is the single DAW-ready export (contrast ``export_midi_parts``, which writes
+    the parts as separate per-stem files). Returns the file bytes so callers can stream
+    a download without writing to disk.
+    """
+    tempo = float(arrangement["identity"]["tempo"])
+    part_tracks: list[bytes] = []
+    for part, notes in sorted(arrangement["parts"].items()):
+        if not notes:
+            continue
+        channel = PART_CHANNELS.get(part, 0)
+        part_tracks.append(_note_track(notes, channel, name=part))
+    header = b"MThd" + _u32(6) + _u16(1) + _u16(1 + len(part_tracks)) + _u16(TICKS_PER_BEAT)
+    return header + _tempo_track(tempo) + b"".join(part_tracks)
+
+
+def write_combined_midi(arrangement: dict[str, Any], path: Path) -> Path:
+    """Write the multitrack ``combined_midi_bytes`` to ``path``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(combined_midi_bytes(arrangement))
     return path
 
 
