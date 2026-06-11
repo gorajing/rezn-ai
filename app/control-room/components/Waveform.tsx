@@ -2,8 +2,11 @@
 
 import { useMemo, useRef } from "react";
 
-// Seeded waveform is the idle fallback. When live analyzer levels are provided,
-// the bars follow the current audio spectrum while the played portion stays accented.
+// Seeded waveform is the idle fallback. While a clip plays, an analyser writes the
+// real loudness of each time-slice into the bar the playhead has passed, so the bars
+// show energy-over-time — not the frequency spectrum (which always rolls off in the
+// highs and reads as a fake fade-out). Bars ahead of the playhead keep the seeded
+// shape so the clip looks whole while it fills in left→right.
 // When `onSeek` is supplied the track doubles as a seek slider (click + keyboard).
 
 type WaveformProps = {
@@ -19,12 +22,12 @@ type WaveformProps = {
 function heights(seed: string, bars: number): number[] {
   let h = 0;
   for (let i = 0; i < seed.length; i += 1) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  return Array.from({ length: bars }).map((_, i) => {
+  return Array.from({ length: bars }).map(() => {
     h = (h * 1103515245 + 12345) >>> 0;
     const rand = (h % 1000) / 1000;
-    // Sine envelope across the bar so it reads like an audio clip.
-    const env = 0.5 + 0.5 * Math.sin((i / bars) * Math.PI * 2 - Math.PI / 2);
-    return Math.max(0.16, Math.min(1, 0.35 * env + 0.55 * rand + 0.12));
+    // Flat-ish random heights — no positional envelope, so the idle clip doesn't
+    // read as a fade-in/out that the actual audio doesn't have.
+    return Math.max(0.22, Math.min(1, 0.6 * rand + 0.28));
   });
 }
 
@@ -43,8 +46,11 @@ export function Waveform({
   const data = hasLiveLevels
     ? Array.from({ length: bars }).map((_, i) => {
         const live = levels?.[i] ?? 0;
-        const shaped = Math.pow(Math.min(1, Math.max(0, live)), 0.72);
-        return Math.max(0.08, Math.min(1, shaped));
+        // Bars the playhead has reached carry a real loudness sample; bars ahead of
+        // it have no sample yet, so keep the seeded shape until they fill in.
+        if (live <= 0.02) return fallback[i];
+        const shaped = Math.pow(Math.min(1, live), 0.72);
+        return Math.max(0.12, Math.min(1, shaped));
       })
     : fallback;
   const playedCount = Math.min(bars, Math.max(0, Math.round(progress * bars)));

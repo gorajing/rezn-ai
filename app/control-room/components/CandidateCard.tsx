@@ -155,36 +155,36 @@ export function CandidateCard({
     void ctx.resume();
 
     const analyser = analyserRef.current;
-    const frequencyData = new Uint8Array(analyser.frequencyBinCount);
+    const timeData = new Uint8Array(analyser.fftSize);
     let frame = 0;
     let lastCommit = 0;
     let cancelled = false;
 
     const tick = (now: number) => {
       if (cancelled) return;
-      analyser.getByteFrequencyData(frequencyData);
+      // RMS of the current waveform window = how loud the track is *right now*.
+      analyser.getByteTimeDomainData(timeData);
+      let sumSq = 0;
+      for (let i = 0; i < timeData.length; i += 1) {
+        const v = (timeData[i] - 128) / 128;
+        sumSq += v * v;
+      }
+      const loud = Math.min(1, Math.sqrt(sumSq / timeData.length) * 2.6);
 
-      const next = levelsRef.current.slice();
-      const usefulBins = Math.floor(frequencyData.length * 0.72);
-      for (let i = 0; i < WAVEFORM_BARS; i += 1) {
-        const start = Math.floor((i / WAVEFORM_BARS) * usefulBins);
-        const end = Math.max(start + 1, Math.floor(((i + 1) / WAVEFORM_BARS) * usefulBins));
-        let peak = 0;
-        let sum = 0;
-        for (let bin = start; bin < end; bin += 1) {
-          const value = frequencyData[bin] / 255;
-          peak = Math.max(peak, value);
-          sum += value;
-        }
-        const average = sum / (end - start);
-        const target = Math.min(1, peak * 0.72 + average * 0.5);
-        next[i] += (target - next[i]) * 0.35;
+      // Paint that loudness into the bar for the current time-slice, keeping the
+      // loudest sample seen there. Bars fill left→right as the playhead advances,
+      // so the waveform shows energy-over-time, not the (always-rolls-off) spectrum.
+      const next = levelsRef.current;
+      const dur = el.duration;
+      if (Number.isFinite(dur) && dur > 0) {
+        const pos = Math.min(0.9999, Math.max(0, el.currentTime / dur));
+        const bar = Math.min(WAVEFORM_BARS - 1, Math.floor(pos * WAVEFORM_BARS));
+        if (loud > next[bar]) next[bar] = loud;
       }
 
-      levelsRef.current = next;
       setCurrentTime(el.currentTime);
       if (now - lastCommit > 32) {
-        setWaveLevels(next);
+        setWaveLevels(next.slice());
         lastCommit = now;
       }
       frame = requestAnimationFrame(tick);
