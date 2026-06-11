@@ -28,6 +28,12 @@ import { AgentRoom } from "./components/AgentRoom";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { CopilotBridge, type CopilotActionsApi } from "./CopilotBridge";
 
+// The CopilotKit AI chat is off unless explicitly enabled: it needs a chat-capable
+// LLM (W&B Inference rejects its calls; OpenAI must be funded). Gating the provider
+// (layout.tsx) and this bridge stops the runtime retry-storm. Brief submission and
+// curation are independent of CopilotKit, so they keep working.
+const CHAT_ENABLED = process.env.NEXT_PUBLIC_ENABLE_CHAT === "true";
+
 const DEFAULT_SERVICES: ServiceStatus[] = [
   { id: "engine", label: "REZN Engine", state: "ok", detail: "Clean-room synthesis" },
   { id: "redis", label: "Redis", state: "warn", detail: "Checking…" },
@@ -403,8 +409,11 @@ export function ControlRoom() {
 
   return (
     <div className="relative z-10 flex h-[100dvh] flex-col overflow-hidden">
-      {/* Registers CopilotKit readable context + actions; renders nothing. */}
-      <CopilotBridge context={copilotContext} candidates={candidates} actions={copilotActions} />
+      {/* Registers CopilotKit readable context + actions; renders nothing. Gated
+          off by default (see CHAT_ENABLED) so the runtime endpoint isn't polled. */}
+      {CHAT_ENABLED && (
+        <CopilotBridge context={copilotContext} candidates={candidates} actions={copilotActions} />
+      )}
 
       <TopBar
         batchStatus={batchStatus}

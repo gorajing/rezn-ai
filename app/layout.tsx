@@ -32,6 +32,11 @@ export const metadata: Metadata = {
   description: "REZN Control Room — generate, curate, and refine original tracks.",
 };
 
+// The CopilotKit provider polls /api/copilotkit; only mount it when the chat is
+// explicitly enabled (it needs a funded, chat-capable LLM). Off by default so the
+// public demo never triggers the runtime retry-storm.
+const CHAT_ENABLED = process.env.NEXT_PUBLIC_ENABLE_CHAT === "true";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -43,9 +48,13 @@ export default function RootLayout({
       <body
         className={`theme-dark ${display.variable} ${body.variable} ${dmMono.variable} antialiased`}
       >
-        <CopilotKit runtimeUrl="/api/copilotkit" showDevConsole={false} enableInspector={false}>
-          {children}
-        </CopilotKit>
+        {CHAT_ENABLED ? (
+          <CopilotKit runtimeUrl="/api/copilotkit" showDevConsole={false} enableInspector={false}>
+            {children}
+          </CopilotKit>
+        ) : (
+          children
+        )}
       </body>
     </html>
   );
