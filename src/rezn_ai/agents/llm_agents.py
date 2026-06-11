@@ -116,6 +116,31 @@ def _parse_json_object(content: str) -> dict:
     return json.loads(content[start : end + 1])
 
 
+def _complete_json(client, model: str, messages: list[dict], *, attempts: int = 2, **kwargs) -> dict:
+    """Call the model in JSON mode and return a parsed JSON object.
+
+    ``response_format={"type": "json_object"}`` constrains the endpoint to emit a valid
+    JSON object, so the model cannot return prose — that is what caused the intermittent
+    "no JSON object in model response" failures. A rare transient empty/unparseable
+    completion is retried; after the final attempt this raises, so the caller's fail-loud
+    posture still governs a persistently broken endpoint. No deterministic fallback is
+    introduced here — the goal is to make the live call reliably parse, not to bypass it.
+    """
+    last_exc: Exception | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                **kwargs,
+            )
+            return _parse_json_object(response.choices[0].message.content or "")
+        except Exception as exc:  # transient flaky completion / unparseable content
+            last_exc = exc
+    raise ValueError(f"model returned no valid JSON after {attempts} attempts: {last_exc}")
+
+
 # --------------------------------------------------------------------------- #
 # propose_plan: pre-composition creative nudges
 # --------------------------------------------------------------------------- #
@@ -177,13 +202,12 @@ def _llm_propose_plan(
         f"{_guidance_block(guidance)}"
         "Give this candidate a distinct angle that fits the strategy persona."
     )
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0.9,
-        max_tokens=600,  # headroom so the JSON object is never truncated
+    raw = _complete_json(
+        client, model,
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        temperature=0.9, max_tokens=600,
     )
-    return _coerce_plan(strategy, _parse_json_object(response.choices[0].message.content or ""))
+    return _coerce_plan(strategy, raw)
 
 
 @weave_op("propose_plan")
@@ -272,13 +296,12 @@ def _llm_critique(arrangement: dict, metrics: dict, brief: CreativeBrief) -> Cri
         f"Audio: peak={metrics.get('peak')}, rms={metrics.get('rms')}, "
         f"duration={metrics.get('duration_seconds')}s"
     )
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0.3,
-        max_tokens=500,  # headroom so the JSON object is never truncated
+    raw = _complete_json(
+        client, model,
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        temperature=0.3, max_tokens=500,
     )
-    return _coerce_critique(_parse_json_object(response.choices[0].message.content or ""))
+    return _coerce_critique(raw)
 
 
 @weave_op("critique_candidate")
@@ -406,21 +429,15 @@ def _llm_lens_verdict(lens: str, candidates: list[CriticInput]) -> LensVerdict:
         "Respond with a compact JSON object only: ranking (array of candidate_id best->worst), "
         "favorite (candidate_id), rationale (<=30 words)."
     )
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    raw = _complete_json(
+        client, model,
+        [
             {"role": "system", "content": system},
             {"role": "user", "content": f"Candidates:\n{rows}\nRank them by your lens."},
         ],
-        temperature=0.4,
-        max_tokens=400,
-        timeout=PANEL_CALL_TIMEOUT_S,
+        temperature=0.4, max_tokens=400, timeout=PANEL_CALL_TIMEOUT_S,
     )
-    return _coerce_lens_verdict(
-        lens,
-        _parse_json_object(response.choices[0].message.content or ""),
-        _fallback_lens_verdict(lens, candidates),
-    )
+    return _coerce_lens_verdict(lens, raw, _fallback_lens_verdict(lens, candidates))
 
 
 @weave_op("lens_critique")
@@ -482,19 +499,15 @@ def _llm_judge(candidates: list[CriticInput], verdicts: list[LensVerdict]) -> Ju
         "(array of candidate_id best->worst), winner (candidate_id), rationale (<=40 words), "
         "confidence (0..1)."
     )
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    raw = _complete_json(
+        client, model,
+        [
             {"role": "system", "content": system},
             {"role": "user", "content": f"Technical scores:\n{scores}\n\nPanel:\n{panel}\n\nDecide."},
         ],
-        temperature=0.3,
-        max_tokens=400,
-        timeout=PANEL_CALL_TIMEOUT_S,
+        temperature=0.3, max_tokens=400, timeout=PANEL_CALL_TIMEOUT_S,
     )
-    return _coerce_judge(
-        _parse_json_object(response.choices[0].message.content or ""), _fallback_judge(candidates)
-    )
+    return _coerce_judge(raw, _fallback_judge(candidates))
 
 
 @weave_op("judge_panel")
@@ -563,13 +576,12 @@ def _llm_interpret(prompt: str, fb: dict) -> BriefInterpretation:
         "Honor any explicit key or BPM in the brief; infer the rest from genre, mood, "
         "instruments, and references."
     )
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": f"Brief: {prompt}"}],
-        temperature=0.4,
-        max_tokens=300,
+    raw = _complete_json(
+        client, model,
+        [{"role": "system", "content": system}, {"role": "user", "content": f"Brief: {prompt}"}],
+        temperature=0.4, max_tokens=300,
     )
-    return _coerce_interpretation(_parse_json_object(response.choices[0].message.content or ""), fb)
+    return _coerce_interpretation(raw, fb)
 
 
 @weave_op("interpret_brief")
@@ -669,13 +681,11 @@ def _llm_reflect(brief_text: str, signals: list[dict], notes: list[str]) -> Refl
         f"Producer notes:\n{note_block}\n"
         "What should the next batch keep and change?"
     )
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0.5,
-        max_tokens=600,
+    raw = _complete_json(
+        client, model,
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        temperature=0.5, max_tokens=600,
     )
-    raw = _parse_json_object(response.choices[0].message.content or "")
     keep = tuple(str(x)[:120] for x in (raw.get("keep") or [])[:4])
     change = tuple(str(x)[:120] for x in (raw.get("change") or [])[:4])
     intent = str(raw.get("intent", "")).strip()[:200] or "refine from feedback"
