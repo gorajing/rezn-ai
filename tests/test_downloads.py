@@ -59,3 +59,25 @@ def test_audio_endpoint_returns_wav_attachment(client):
 def test_download_endpoints_404_for_unknown_candidate(client):
     assert client.get("/api/candidates/cand_does_not_exist/midi").status_code == 404
     assert client.get("/api/candidates/cand_does_not_exist/audio").status_code == 404
+
+
+def test_midi_stem_endpoint_returns_attachment(client):
+    cand = _start_one(client)
+    parts = list((cand.get("midi_urls") or {}).keys())
+    assert parts, "a generated candidate should expose at least one MIDI stem"
+    part = parts[0]
+    r = client.get(f"/api/candidates/{cand['candidate_id']}/midi/{part}")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("audio/midi")
+    cd = r.headers.get("content-disposition", "").lower()
+    assert "attachment" in cd and part in cd  # filename carries the part
+    assert r.content[:4] == b"MThd"
+
+
+def test_midi_stem_404_for_unknown_part(client):
+    cand = _start_one(client)
+    assert client.get(f"/api/candidates/{cand['candidate_id']}/midi/notapart").status_code == 404
+
+
+def test_midi_stem_404_for_unknown_candidate(client):
+    assert client.get("/api/candidates/cand_nope/midi/bass").status_code == 404

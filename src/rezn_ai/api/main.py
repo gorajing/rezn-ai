@@ -387,6 +387,17 @@ def download_midi(candidate_id: str) -> Response:
     )
 
 
+@app.get("/api/candidates/{candidate_id}/midi/{part}")
+def download_midi_stem(candidate_id: str, part: str) -> FileResponse:
+    """Download one MIDI stem (e.g. bass/drums/harmony/lead/texture) as an attachment,
+    for pulling a single part into a DAW. The combined multitrack file is /midi."""
+    candidate = _get_candidate_or_404(candidate_id)
+    path = _artifact_path((candidate.midi_urls or {}).get(part))
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="MIDI stem not found")
+    return FileResponse(path, media_type="audio/midi", filename=f"{candidate_id}-{part}.mid")
+
+
 # ── Refinement memory ───────────────────────────────────────────────────────
 
 @app.get("/api/lessons")

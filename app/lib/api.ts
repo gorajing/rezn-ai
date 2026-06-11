@@ -147,6 +147,7 @@ export function toUiCandidate(c: ApiCandidate, rank: number): Candidate {
     reasons: c.reasons?.length ? c.reasons : ["Generated candidate"],
     parentId: c.parent_candidate_id ?? undefined,
     audioUrl: artifactUrl(c.audio_url),
+    midiParts: Object.keys(c.midi_urls ?? {}).sort(),
     traceUrl: c.trace_url ?? undefined,
     scoreDetail: toScoreDetail(c.scores, Number(c.technical_score ?? 0)),
     internalPrompt: c.internal_prompt ?? undefined,

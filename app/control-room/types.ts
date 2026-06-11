@@ -52,6 +52,7 @@ export interface Candidate {
   reasons: string[];
   parentId?: string;
   audioUrl?: string; // live preview WAV served from the API /artifacts mount
+  midiParts?: string[]; // per-candidate MIDI stem names (bass, drums, …) for stem downloads
   traceUrl?: string; // W&B Weave trace link
   scoreDetail?: ScoreDetail; // real breakdown of how the score was computed
   internalPrompt?: string; // the generated INTERNAL prompt (not the UI starter brief)

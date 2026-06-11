@@ -358,6 +358,22 @@ export function CandidateCard({
         </div>
       )}
 
+      {/* MIDI stems — pull a single part into a DAW (alongside the combined .mid above) */}
+      {hasAudio && candidate.midiParts && candidate.midiParts.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-subtle">
+          <span>Stems</span>
+          {candidate.midiParts.map((part) => (
+            <a
+              key={part}
+              href={`${API_BASE}/api/candidates/${candidate.id}/midi/${part}`}
+              className="font-mono text-muted underline-offset-2 transition-colors hover:text-accent hover:underline"
+            >
+              {part}
+            </a>
+          ))}
+        </div>
+      )}
+
       {/* Top reason */}
       <p className="flex items-center gap-1.5 text-xs text-muted">
         <span className="text-accent">•</span>
