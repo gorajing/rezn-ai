@@ -1,7 +1,6 @@
 # rezn-ai
 
-**WeaveHacks 4: Multi-Agent Orchestration Hackathon with Weights & Biases Winner (Best use of Redis)
-**https://luma.com/weavehacks?tk=9BBGgo
+WeaveHacks 4: Multi-Agent Orchestration Hackathon with Weights & Biases Winner (Best use of Redis) https://luma.com/weavehacks?tk=9BBGgo
 
 `rezn-ai` is a clean-room, multi-agent music generation lab. A human writes a
 creative brief, the system fans it out to several original candidate tracks,
