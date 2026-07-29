@@ -1,13 +1,22 @@
 # rezn-ai
 
-**WeaveHacks 4: Multi-Agent Orchestration Hackathon with Weights & Biases Winner (Best use of Redis)** ([event page](https://luma.com/weavehacks?tk=9BBGgo))
+> [!IMPORTANT]
+> **Archived hackathon case study — status verified 2026-07-28.**
+> The source remains locally reproducible, but the former Railway API has been
+> decommissioned and the still-reachable Vercel UI is not an operational
+> end-to-end service. This repository is preserved as an engineering case study,
+> not maintained as a persistent product.
+
+**WeaveHacks 4 winner — Best Use of Redis.**
+The award is recorded by [Redis](https://www.linkedin.com/posts/redisinc_weavehacks-rezn-demo-vid-activity-7469871032183631872-Lt4j)
+and the [event page](https://luma.com/weavehacks?tk=9BBGgo).
 
 `rezn-ai` is a clean-room, multi-agent music generation lab. A human writes a
 creative brief, the system fans it out to several original candidate tracks,
 ranks them, captures human taste feedback, and uses that feedback to steer the
 next batch.
 
-The current `main` branch is a working end-to-end demo stack:
+The archived implementation contains the complete end-to-end demo stack:
 
 - A **Next.js Control Room** at `app/` for entering briefs, listening to preview
   audio, approving or rejecting candidates, requesting variants, refining a
@@ -17,11 +26,11 @@ The current `main` branch is a working end-to-end demo stack:
 - A **clean-room Python music engine** that writes deterministic arrangements,
   MIDI parts, short WAV previews, technical scores, critic notes, and provenance
   metadata without samples or DAW automation.
-- **Redis-backed live state and learning memory**, with an in-memory fallback for
+- **Redis-backed state and learning memory**, with an in-memory fallback for
   relaxed local development and hermetic tests.
 - **W&B Weave tracing and evaluations**, plus optional W&B Inference or OpenAI
   agent enrichment.
-- **CopilotKit runtime wiring** that exposes the live batch and app actions to a
+- **CopilotKit runtime wiring** that exposes batch and app actions to a
   copilot. The visible Control Room currently uses a custom Studio panel and UI
   buttons as the primary operator surface.
 
@@ -29,7 +38,7 @@ The current `main` branch is a working end-to-end demo stack:
 
 - **W&B Weave workspace:** <https://wandb.ai/rezn-ai/rezn-ai/weave>
 - **Weave Evaluations:** <https://wandb.ai/rezn-ai/rezn-ai/weave/evaluations>
-- **Deployment guide:** [`docs/DEPLOY.md`](docs/DEPLOY.md)
+- **Historical deployment guide:** [`docs/DEPLOY.md`](docs/DEPLOY.md)
 - **Demo script and DevPost copy:** [`docs/DEMO.md`](docs/DEMO.md)
 - **Sponsor architecture:** [`docs/sponsor-architecture.md`](docs/sponsor-architecture.md)
 - **No-DAW ADR:** [`docs/adr/0002-self-contained-synthesis-no-daw.md`](docs/adr/0002-self-contained-synthesis-no-daw.md)
@@ -38,7 +47,7 @@ The current `main` branch is a working end-to-end demo stack:
 
 ## What It Does
 
-The live product loop is:
+The implemented demo loop is:
 
 1. The operator enters a prompt, key, mode, tempo, and candidate count in the
    Control Room.
@@ -86,9 +95,9 @@ rezn-ai/
 
 There are two implemented top-level generation paths:
 
-- **Live API path:** `Control Room -> FastAPI -> BatchConductor ->
-  ReznGeneratorEngine -> artifacts/batches/...`. This is the primary demo and
-  product path.
+- **API demo path:** `Control Room -> FastAPI -> BatchConductor ->
+  ReznGeneratorEngine -> artifacts/batches/...`. This was the primary
+  hackathon demonstration path.
 - **CLI provenance path:** `rezn-ai batch/refine/init-run/... -> runs/...`.
   This is still useful for clean-room run folders, Weave evaluations, and
   command-line verification.
@@ -627,18 +636,20 @@ Never commit real `.env` or `.env.local` values.
 
 ## Current Limitations
 
-- There are two top-level generation paths: the live API path writes
+- There are two top-level generation paths: the API demo path writes
   `artifacts/`, while the CLI path writes `runs/`.
 - The preview synth is designed for deterministic review clips, not final
   studio-quality masters.
 - CopilotKit is wired as provider, runtime, readable context, and actions, but
   the mounted visible chat UI is custom and calls FastAPI directly.
-- Generation is request/response today. The backend has an events endpoint, but
-  the frontend does not stream or poll progress while a batch is running.
+- Batch and refine generation run in FastAPI background tasks. The frontend
+  polls batch state every two seconds; there is no durable external job queue.
 - Missing Weave or LLM keys degrade gracefully outside production. Production
   posture is intentionally strict.
 - Artifact storage is local to the API process.
-- Some older planning docs still describe the pre-ADR conductor/Ableton layout.
+- `docs/architecture.md` is a legacy pre-implementation plan and is not a
+  source-of-truth architecture document. Some other planning docs also describe
+  the pre-ADR conductor/Ableton layout.
   Treat `docs/DEPLOY.md`, `docs/DEMO.md`, `docs/sponsor-architecture.md`,
   ADR-0002, `CLEAN_ROOM.md`, and `PROVENANCE.md` as the most useful current
   references. `docs/API_CONTRACT.md` is useful, but the source code remains the

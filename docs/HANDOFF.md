@@ -1,8 +1,16 @@
-# rezn-ai — Handoff (2026-06-11)
+# rezn-ai — Handoff (historical snapshot: 2026-06-11)
 
-Context for the next agent picking up `rezn-ai`. The app is **live and reliable**; this doc
-covers what's deployed, what shipped, and the prioritized remaining work. The remaining-work
-list was produced by a 7-dimension code audit on 2026-06-11 and is evidence-backed (file:line).
+> [!WARNING]
+> This is a historical deployment snapshot, not current operations guidance.
+> On 2026-07-28 both Vercel frontend domains still returned the Control Room
+> shell, but the Railway backend returned `404 Application not found`. Redis
+> Cloud, Agent Memory and inference were not reverified. See `ARCHIVE_STATUS.md`
+> and the top of `README.md` for current status.
+
+Context for the 2026-06-11 handoff. At that time the app was live and reliable;
+this document recorded what was deployed, what shipped and the prioritized
+remaining work. The remaining-work list came from a 7-dimension code audit and
+is evidence-backed (file:line).
 
 `rezn-ai` is a WeaveHacks multi-agent music lab: one natural-language brief → several
 original, audibly-distinct candidates → agents score/critique them → a human curates in a
@@ -13,16 +21,16 @@ self-improving-loop spec under `docs/superpowers/specs/`.
 
 ---
 
-## Live deployment
+## Historical deployment snapshot
 
 | Piece | Where | Notes |
 |---|---|---|
 | **Frontend** | **https://reznai.vercel.app** | Vercel project `jins-projects-891d981d/rezn-ai`. `rezn-ai.vercel.app` also works. Push to `main` auto-deploys. |
 | **Backend** | **https://rezn-api-production.up.railway.app** | Railway project `rezn-ai`, service `rezn-api`. FastAPI in one container + a persistent volume at `/app/artifacts`. Deploy with `railway up`. |
-| Redis Cloud · Agent Memory (Iris) · W&B Weave · W&B Inference | user's accounts | all live; creds in the local `.env` and set on Railway. |
+| Redis Cloud · Agent Memory (Iris) · W&B Weave · W&B Inference | user's accounts | Reported live in this snapshot; not a current status claim. |
 | GitHub | `github.com/gorajing/rezn-ai`, branch `main` | everything is committed + pushed to `main` (no side branches). |
 
-**Operate:** `docs/DEPLOY.md` is the runbook; `deploy/railway.env.example` +
+**Historical runbook:** `docs/DEPLOY.md`; `deploy/railway.env.example` +
 `deploy/vercel.env.example` list every env var. The deployment topology + gotchas are also
 in agent memory (`rezn-deployment`).
 
@@ -44,8 +52,8 @@ in agent memory (`rezn-deployment`).
 7. **Async refine** (`c59152c`) — refine was synchronous and dropped the browser connection on slow generations (a 62s timeout). Fixed by mirroring the batch pattern: `begin_refine` (fast `running` child) + `generate_refine` (background → `_fail_batch`), `BackgroundTasks` in the `/refine` endpoint, and a refine-aware poller (`parent_batch_id`). `refine_batch` stays synchronous for direct callers.
 8. **Waveform = loudness-over-time** (`2fcbb8e`) — the candidate waveform drew the **frequency spectrum** (`getByteFrequencyData`) while playing, so the highs' natural rolloff read as a fake **fade-out at the end** even on flat tracks; the idle seeded fallback added a second `sin()` taper. Now an analyser writes each time-slice's **RMS** into the bar the playhead reaches (energy-over-time — flat for a flat track). Audio engine untouched; purely the visualization. Verified in a browser (played bars flat, no taper) and against the WAV's own RMS (flat end-to-end).
 
-**Verified:** backend suite **419 collected — 415 passed, 4 skipped** (the 4 skips are opt-in
-real-Redis integration tests, gated on `REZN_TEST_REDIS_URL` — not a coverage defect). Live:
+**Verified in the 2026-06-11 snapshot:** backend suite **419 collected — 415 passed, 4 skipped** (the 4 skips are opt-in
+real-Redis integration tests, gated on `REZN_TEST_REDIS_URL` — not a coverage defect). At that time:
 `POST` returns in ~0.2s; production batches rank reliably; downloads return WAV + 6-track MIDI
 + stems; refine streams a child batch in; the page loads with 0 console errors.
 
@@ -53,7 +61,8 @@ real-Redis integration tests, gated on `REZN_TEST_REDIS_URL` — not a coverage 
 
 ## Remaining work (prioritized — audited 2026-06-11)
 
-**No P0** — nothing blocks the live link working for a single visitor today. The work below
+**Historical assessment: no P0.** This is no longer true for hosted use because
+the backend has been decommissioned. The work below
 hardens it for *wide* sharing, then adds robustness, then unblocks horizontal scale.
 
 ### P1 — Harden before sharing the link widely

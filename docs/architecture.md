@@ -1,4 +1,11 @@
-# Architecture
+# Architecture (legacy pre-implementation plan)
+
+> [!WARNING]
+> This document preserves the original design plan. It is not the current
+> architecture: paths such as `apps/web` and `services/api`, several endpoints
+> and multiple proposed modules were never implemented under these names. Use
+> the `Current Architecture` section of `README.md` and the source tree as the
+> authority.
 
 ## Overview
 
